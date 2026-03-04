@@ -190,15 +190,6 @@ impl MediaStatus {
 // Structs
 // ---------------------------------------------------------------------------
 
-/// Options for creating a WAV player.
-#[derive(Debug, Clone)]
-pub struct PlayerOptions {
-    /// Path to the WAV file.
-    pub file_path: String,
-    /// Whether to loop the file.
-    pub looped: bool,
-}
-
 /// High-level call information.
 #[derive(Debug, Clone)]
 pub struct CallInfo {
@@ -419,14 +410,4 @@ mod tests {
         assert_eq!(cfg.access_code.as_deref(), Some("1234"));
     }
 
-    #[test]
-    fn player_options_debug() {
-        let opts = PlayerOptions {
-            file_path: "/tmp/test.wav".into(),
-            looped: true,
-        };
-        let debug = format!("{:?}", opts);
-        assert!(debug.contains("test.wav"));
-        assert!(debug.contains("true"));
-    }
 }

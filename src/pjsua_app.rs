@@ -396,6 +396,7 @@ impl Drop for PjsuaApp {
     fn drop(&mut self) {
         info!("destroying PJSUA");
         unsafe { ffi::pjsua_destroy() };
+        event::clear_event_sender();
         INITIALIZED.store(false, Ordering::SeqCst);
     }
 }

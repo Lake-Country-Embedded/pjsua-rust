@@ -4,7 +4,7 @@
 //! Each callback converts raw FFI data into a [`SipEvent`] and sends it
 //! through a `tokio::sync::mpsc::UnboundedSender`.
 
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tracing::{error, trace};
 
@@ -53,25 +53,32 @@ pub enum SipEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Global event channel
+// Global event channel (Mutex-based so it can be reset on Drop)
 // ---------------------------------------------------------------------------
 
-static EVENT_TX: OnceLock<mpsc::UnboundedSender<SipEvent>> = OnceLock::new();
+static EVENT_TX: Mutex<Option<mpsc::UnboundedSender<SipEvent>>> = Mutex::new(None);
 
-/// Store the sender half of the event channel.  Called once during
+/// Store the sender half of the event channel. Called during
 /// [`PjsuaApp::new`](crate::PjsuaApp::new).
 pub(crate) fn set_event_sender(tx: mpsc::UnboundedSender<SipEvent>) {
-    EVENT_TX
-        .set(tx)
-        .unwrap_or_else(|_| error!("Event sender already set (double init?)"));
+    let mut guard = EVENT_TX.lock().unwrap();
+    *guard = Some(tx);
 }
 
-/// Send an event through the global channel.  Silently drops if the
+/// Clear the event sender. Called during [`PjsuaApp::drop`].
+pub(crate) fn clear_event_sender() {
+    let mut guard = EVENT_TX.lock().unwrap();
+    *guard = None;
+}
+
+/// Send an event through the global channel. Silently drops if the
 /// receiver has been closed or the sender was never installed.
 fn send_event(event: SipEvent) {
-    if let Some(tx) = EVENT_TX.get() {
-        if let Err(e) = tx.send(event) {
-            trace!("Event channel closed, dropping event: {}", e);
+    if let Ok(guard) = EVENT_TX.lock() {
+        if let Some(tx) = guard.as_ref() {
+            if let Err(e) = tx.send(event) {
+                trace!("Event channel closed, dropping event: {}", e);
+            }
         }
     }
 }
