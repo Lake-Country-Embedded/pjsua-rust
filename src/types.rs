@@ -49,6 +49,12 @@ pub enum TransportType {
     Tls,
 }
 
+impl Default for TransportType {
+    fn default() -> Self {
+        TransportType::Udp
+    }
+}
+
 impl TransportType {
     /// Convert to the PJSIP C enum value.
     pub fn to_pjsip(self) -> u32 {
@@ -77,6 +83,12 @@ pub enum SrtpMode {
     Disabled,
     Optional,
     Mandatory,
+}
+
+impl Default for SrtpMode {
+    fn default() -> Self {
+        SrtpMode::Disabled
+    }
 }
 
 impl SrtpMode {
