@@ -1,0 +1,4 @@
+/target
+config/test-accounts.toml
+*.wav
+recordings/

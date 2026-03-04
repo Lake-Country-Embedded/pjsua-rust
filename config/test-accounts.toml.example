@@ -1,0 +1,22 @@
+[general]
+log_level = 3
+clock_rate = 16000
+null_audio = true
+
+[[accounts]]
+name = "caller"
+username = "6013"
+password = "changeme"
+server = "192.168.10.10"
+port = 5060
+transport = "udp"
+srtp = "disabled"
+
+[[accounts]]
+name = "receiver"
+username = "6014"
+password = "changeme"
+server = "192.168.10.10"
+port = 5060
+transport = "udp"
+srtp = "disabled"
