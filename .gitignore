@@ -2,3 +2,4 @@
 config/test-accounts.toml
 *.wav
 recordings/
+docs/plans/
