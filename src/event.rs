@@ -182,6 +182,9 @@ pub(crate) unsafe extern "C" fn on_dtmf_digit2(
     call_id: ffi::pjsua_call_id,
     info: *const ffi::pjsua_dtmf_info,
 ) {
+    if info.is_null() {
+        return;
+    }
     let info = unsafe { &*info };
     // digit is c_uint; cast to u8 then char
     let digit = char::from(info.digit as u8);

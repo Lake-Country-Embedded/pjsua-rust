@@ -94,6 +94,14 @@ impl TomlAccountConfig {
     }
 }
 
+impl std::str::FromStr for Config {
+    type Err = PjError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        toml::from_str(s).map_err(|e| PjError::Config(format!("TOML parse error: {e}")))
+    }
+}
+
 impl Config {
     /// Load configuration from a TOML file on disk.
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> Result<Config> {
@@ -105,7 +113,7 @@ impl Config {
 
     /// Parse configuration from a TOML string.
     pub fn from_str(toml_str: &str) -> Result<Config> {
-        toml::from_str(toml_str).map_err(|e| PjError::Config(format!("TOML parse error: {e}")))
+        <Self as std::str::FromStr>::from_str(toml_str)
     }
 
     /// Convert the `[general]` section into a [`PjsuaConfig`].
@@ -247,6 +255,34 @@ name = "bad"
 "#;
         let result = Config::from_str(bad);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_load_nonexistent_file() {
+        let err = Config::load("/tmp/nonexistent-pjsua-config.toml").unwrap_err();
+        match err {
+            PjError::Config(msg) => assert!(
+                msg.contains("No such file") || msg.contains("not found"),
+                "msg: {msg}"
+            ),
+            other => panic!("Expected Config error, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn config_from_str_trait() {
+        let toml = r#"
+        [general]
+        log_level = 3
+        [[accounts]]
+        name = "test"
+        username = "user"
+        password = "pass"
+        server = "127.0.0.1"
+        "#;
+        // .parse() requires FromStr impl
+        let cfg: Config = toml.parse().unwrap();
+        assert_eq!(cfg.accounts.len(), 1);
     }
 
     #[test]

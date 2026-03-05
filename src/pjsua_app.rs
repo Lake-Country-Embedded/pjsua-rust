@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
-use crate::error::{check_status, PjError, Result};
+use crate::error::{check_status, make_pj_error, PjError, Result};
 use crate::event::{self, SipEvent};
 use crate::ffi;
 use crate::ffi_helpers::{pj_str_to_string, PjString};
@@ -26,6 +26,12 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Dropping the value calls `pjsua_destroy()`.
 pub struct PjsuaApp {
     _private: (), // prevent external construction
+}
+
+impl std::fmt::Debug for PjsuaApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PjsuaApp")
+    }
 }
 
 impl PjsuaApp {
@@ -54,7 +60,7 @@ impl PjsuaApp {
         let status = unsafe { ffi::pjsua_create() };
         if status != 0 {
             INITIALIZED.store(false, Ordering::SeqCst);
-            return Err(check_status(status).unwrap_err());
+            return Err(make_pj_error(status));
         }
         debug!("pjsua_create OK");
 
@@ -85,7 +91,7 @@ impl PjsuaApp {
         if status != 0 {
             unsafe { ffi::pjsua_destroy() };
             INITIALIZED.store(false, Ordering::SeqCst);
-            return Err(check_status(status).unwrap_err());
+            return Err(make_pj_error(status));
         }
         debug!("pjsua_init OK");
 
@@ -95,7 +101,7 @@ impl PjsuaApp {
             if status != 0 {
                 unsafe { ffi::pjsua_destroy() };
                 INITIALIZED.store(false, Ordering::SeqCst);
-                return Err(check_status(status).unwrap_err());
+                return Err(make_pj_error(status));
             }
             debug!("null sound device set");
         }
@@ -105,7 +111,7 @@ impl PjsuaApp {
         if status != 0 {
             unsafe { ffi::pjsua_destroy() };
             INITIALIZED.store(false, Ordering::SeqCst);
-            return Err(check_status(status).unwrap_err());
+            return Err(make_pj_error(status));
         }
         info!("PJSUA started");
 
@@ -297,6 +303,115 @@ impl PjsuaApp {
         check_status(status)
     }
 
+    // ------------------------------------------------------------------
+    // Conference bridge port management
+    // ------------------------------------------------------------------
+
+    /// Add a media port to the conference bridge and return its port ID
+    /// and the pool allocated for the port.
+    ///
+    /// The caller **must** release the returned pool (via `pj_pool_release`)
+    /// after calling `conf_remove_port`. Failing to do so leaks memory.
+    /// [`CustomPort`] and [`ToneGenerator`] handle this automatically.
+    ///
+    /// # Safety
+    /// The caller must ensure the `pjmedia_port` pointer is valid and remains
+    /// alive for as long as it is registered with the conference bridge.
+    pub unsafe fn conf_add_port(
+        &self,
+        port: *mut ffi::pjmedia_port,
+    ) -> Result<(ConfPort, *mut ffi::pj_pool_t)> {
+        let pool = unsafe {
+            ffi::pjsua_pool_create(b"conf-port\0".as_ptr() as *const i8, 512, 512)
+        };
+        if pool.is_null() {
+            return Err(PjError::Pjsip {
+                status: -1,
+                message: "Failed to create pool for conf_add_port".into(),
+            });
+        }
+        let mut port_id: ffi::pjsua_conf_port_id = -1;
+        let status = unsafe { ffi::pjsua_conf_add_port(pool, port, &mut port_id) };
+        if status != 0 {
+            unsafe { ffi::pj_pool_release(pool) };
+            return Err(make_pj_error(status));
+        }
+        debug!("conference port added: id={port_id}");
+        Ok((ConfPort(port_id), pool))
+    }
+
+    /// Remove a port from the conference bridge.
+    pub fn conf_remove_port(&self, port: ConfPort) -> Result<()> {
+        let status = unsafe { ffi::pjsua_conf_remove_port(port.0) };
+        check_status(status)?;
+        debug!("conference port removed: id={}", port.0);
+        Ok(())
+    }
+
+    /// Get information about a conference bridge port.
+    pub fn conf_get_port_info(&self, port: ConfPort) -> Result<ConfPortInfo> {
+        let mut info: ffi::pjsua_conf_port_info = Default::default();
+        let status = unsafe { ffi::pjsua_conf_get_port_info(port.0, &mut info) };
+        check_status(status)?;
+
+        let listeners = (0..info.listener_cnt as usize)
+            .map(|i| ConfPort(info.listeners[i]))
+            .collect();
+
+        Ok(ConfPortInfo {
+            port: ConfPort(info.slot_id),
+            name: pj_str_to_string(&info.name),
+            clock_rate: info.clock_rate,
+            channel_count: info.channel_count,
+            samples_per_frame: info.samples_per_frame,
+            bits_per_sample: info.bits_per_sample,
+            tx_level_adj: info.tx_level_adj,
+            rx_level_adj: info.rx_level_adj,
+            listeners,
+        })
+    }
+
+    /// List all active conference bridge port IDs.
+    pub fn conf_enum_ports(&self) -> Result<Vec<ConfPort>> {
+        let mut ids = [0i32; 254];
+        let mut count = ids.len() as u32;
+        let status = unsafe { ffi::pjsua_enum_conf_ports(ids.as_mut_ptr(), &mut count) };
+        check_status(status)?;
+        Ok(ids[..count as usize].iter().map(|&id| ConfPort(id)).collect())
+    }
+
+    // ------------------------------------------------------------------
+    // Sound device management
+    // ------------------------------------------------------------------
+
+    /// Disconnect the conference bridge from the hardware sound device.
+    pub fn set_no_sound_device(&self) -> Result<()> {
+        let port = unsafe { ffi::pjsua_set_no_snd_dev() };
+        if port.is_null() {
+            return Err(PjError::Pjsip {
+                status: -1,
+                message: "pjsua_set_no_snd_dev returned null".into(),
+            });
+        }
+        debug!("sound device disconnected from conference bridge");
+        Ok(())
+    }
+
+    /// Connect conference bridge to specific sound device IDs (-1 for default).
+    pub fn set_sound_device(&self, capture_dev: i32, playback_dev: i32) -> Result<()> {
+        let status = unsafe { ffi::pjsua_set_snd_dev(capture_dev, playback_dev) };
+        check_status(status)
+    }
+
+    /// Get current sound device IDs (capture, playback).
+    pub fn get_sound_device(&self) -> Result<(i32, i32)> {
+        let mut capture: i32 = -1;
+        let mut playback: i32 = -1;
+        let status = unsafe { ffi::pjsua_get_snd_dev(&mut capture, &mut playback) };
+        check_status(status)?;
+        Ok((capture, playback))
+    }
+
     /// Create a WAV file player.
     ///
     /// If `no_loop` is true, the file plays once and then the port goes
@@ -395,8 +510,8 @@ impl PjsuaApp {
 impl Drop for PjsuaApp {
     fn drop(&mut self) {
         info!("destroying PJSUA");
+        event::clear_event_sender(); // first: callbacks during destroy silently drop
         unsafe { ffi::pjsua_destroy() };
-        event::clear_event_sender();
         INITIALIZED.store(false, Ordering::SeqCst);
     }
 }
@@ -408,6 +523,12 @@ impl Drop for PjsuaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pjsua_app_is_debug() {
+        fn assert_debug<T: std::fmt::Debug>() {}
+        assert_debug::<PjsuaApp>();
+    }
 
     #[test]
     fn pjsua_app_needs_drop() {

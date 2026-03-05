@@ -5,7 +5,9 @@ mod ffi_helpers;
 mod error;
 pub mod config;
 pub mod event;
+pub mod media_port;
 mod pjsua_app;
+pub mod tonegen;
 pub mod types;
 pub mod version;
 
@@ -13,5 +15,7 @@ pub use config::Config;
 pub use error::{check_status, PjError, Result};
 pub use event::SipEvent;
 pub use ffi_helpers::{pj_str_to_string, PjString};
+pub use media_port::{AudioFrame, CustomPort, MediaPort};
 pub use pjsua_app::PjsuaApp;
+pub use tonegen::{DtmfDigit, ToneDesc, ToneGenerator};
 pub use types::*;

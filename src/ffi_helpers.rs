@@ -17,6 +17,8 @@ impl PjString {
     /// Panics if the input contains interior null bytes.
     pub fn new(s: &str) -> Self {
         let cstring = CString::new(s).expect("PjString::new: interior null byte");
+        // SAFETY: pj_str_t.ptr is *mut but PJSIP reads through it without
+        // modification. The CString is kept alive by this struct.
         let pj_str = ffi::pj_str_t {
             ptr: cstring.as_ptr() as *mut std::ffi::c_char,
             slen: s.len() as ffi::pj_ssize_t,
@@ -80,6 +82,12 @@ mod tests {
         assert_eq!(pj_str.slen, 0);
         let output = pj_str_to_string(&pj_str);
         assert_eq!(output, "");
+    }
+
+    #[test]
+    #[should_panic(expected = "interior null byte")]
+    fn pjstring_interior_null_panics() {
+        PjString::new("hello\0world");
     }
 
     #[test]

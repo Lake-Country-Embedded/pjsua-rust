@@ -22,6 +22,10 @@ pub enum PjError {
     #[error("PJSUA already initialized")]
     AlreadyInitialized,
 
+    /// A resource is already in use.
+    #[error("Already in use: {0}")]
+    AlreadyInUse(String),
+
     /// PJSUA has not been initialized yet.
     #[error("PJSUA not initialized")]
     NotInitialized,
@@ -29,6 +33,17 @@ pub enum PjError {
     /// Configuration error.
     #[error("Config error: {0}")]
     Config(String),
+}
+
+/// Create a `PjError::Pjsip` directly from a non-zero status code.
+///
+/// Use this instead of `check_status(status).unwrap_err()` when you already
+/// know the status is an error.
+pub fn make_pj_error(status: i32) -> PjError {
+    PjError::Pjsip {
+        status,
+        message: status_to_string(status),
+    }
 }
 
 /// Check a pj_status_t return value.
@@ -82,6 +97,24 @@ mod tests {
         // The Display impl should produce a non-empty string
         let display = format!("{}", err);
         assert!(!display.is_empty());
+    }
+
+    #[test]
+    fn make_pj_error_produces_pjsip_variant() {
+        let err = make_pj_error(70018);
+        match &err {
+            PjError::Pjsip { status, message } => {
+                assert_eq!(*status, 70018);
+                assert!(!message.is_empty());
+            }
+            other => panic!("Expected Pjsip, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn error_display_already_in_use() {
+        let err = PjError::AlreadyInUse("conference port".into());
+        assert_eq!(format!("{err}"), "Already in use: conference port");
     }
 
     #[test]

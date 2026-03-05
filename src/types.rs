@@ -11,17 +11,41 @@ use crate::ffi;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AccountId(pub i32);
 
+impl fmt::Display for AccountId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// A PJSUA call ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CallId(pub i32);
+
+impl fmt::Display for CallId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// A PJSUA transport ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TransportId(pub i32);
 
+impl fmt::Display for TransportId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// A conference bridge port number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConfPort(pub i32);
+
+impl fmt::Display for ConfPort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl ConfPort {
     /// The master/sound device conference port (port 0).
@@ -32,9 +56,21 @@ impl ConfPort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PlayerId(pub i32);
 
+impl fmt::Display for PlayerId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// A WAV recorder ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RecorderId(pub i32);
+
+impl fmt::Display for RecorderId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -102,11 +138,30 @@ impl SrtpMode {
     }
 }
 
+impl fmt::Display for SrtpMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SrtpMode::Disabled => write!(f, "disabled"),
+            SrtpMode::Optional => write!(f, "optional"),
+            SrtpMode::Mandatory => write!(f, "mandatory"),
+        }
+    }
+}
+
 /// DTMF sending method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DtmfMethod {
     Rfc2833,
     SipInfo,
+}
+
+impl fmt::Display for DtmfMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DtmfMethod::Rfc2833 => write!(f, "RFC2833"),
+            DtmfMethod::SipInfo => write!(f, "SIP-INFO"),
+        }
+    }
 }
 
 /// SIP call state.
@@ -186,6 +241,19 @@ impl MediaStatus {
     }
 }
 
+impl fmt::Display for MediaStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MediaStatus::None => write!(f, "NONE"),
+            MediaStatus::Active => write!(f, "ACTIVE"),
+            MediaStatus::LocalHold => write!(f, "LOCAL_HOLD"),
+            MediaStatus::RemoteHold => write!(f, "REMOTE_HOLD"),
+            MediaStatus::Error => write!(f, "ERROR"),
+            MediaStatus::Unknown(n) => write!(f, "UNKNOWN({n})"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Structs
 // ---------------------------------------------------------------------------
@@ -212,6 +280,20 @@ pub struct AccountInfo {
     pub is_registered: bool,
     pub status_code: u32,
     pub status_text: String,
+}
+
+/// Information about a conference bridge port.
+#[derive(Debug, Clone)]
+pub struct ConfPortInfo {
+    pub port: ConfPort,
+    pub name: String,
+    pub clock_rate: u32,
+    pub channel_count: u32,
+    pub samples_per_frame: u32,
+    pub bits_per_sample: u32,
+    pub tx_level_adj: f32,
+    pub rx_level_adj: f32,
+    pub listeners: Vec<ConfPort>,
 }
 
 /// Top-level PJSUA configuration.
@@ -393,6 +475,39 @@ mod tests {
         };
         assert_eq!(cfg.sip_uri(), "sip:6013@192.168.10.10");
         assert_eq!(cfg.registrar_uri(), "sip:192.168.10.10:5060");
+    }
+
+    #[test]
+    fn media_status_display() {
+        assert_eq!(format!("{}", MediaStatus::Active), "ACTIVE");
+        assert_eq!(format!("{}", MediaStatus::None), "NONE");
+        assert_eq!(format!("{}", MediaStatus::LocalHold), "LOCAL_HOLD");
+        assert_eq!(format!("{}", MediaStatus::RemoteHold), "REMOTE_HOLD");
+        assert_eq!(format!("{}", MediaStatus::Error), "ERROR");
+        assert_eq!(format!("{}", MediaStatus::Unknown(42)), "UNKNOWN(42)");
+    }
+
+    #[test]
+    fn srtp_mode_display() {
+        assert_eq!(format!("{}", SrtpMode::Disabled), "disabled");
+        assert_eq!(format!("{}", SrtpMode::Optional), "optional");
+        assert_eq!(format!("{}", SrtpMode::Mandatory), "mandatory");
+    }
+
+    #[test]
+    fn dtmf_method_display() {
+        assert_eq!(format!("{}", DtmfMethod::Rfc2833), "RFC2833");
+        assert_eq!(format!("{}", DtmfMethod::SipInfo), "SIP-INFO");
+    }
+
+    #[test]
+    fn id_display() {
+        assert_eq!(format!("{}", AccountId(5)), "5");
+        assert_eq!(format!("{}", CallId(3)), "3");
+        assert_eq!(format!("{}", TransportId(1)), "1");
+        assert_eq!(format!("{}", ConfPort(0)), "0");
+        assert_eq!(format!("{}", PlayerId(2)), "2");
+        assert_eq!(format!("{}", RecorderId(7)), "7");
     }
 
     #[test]
