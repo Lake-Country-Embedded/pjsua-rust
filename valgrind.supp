@@ -1,0 +1,199 @@
+# Valgrind suppression file for pjsua-rust
+#
+# PJSIP uses its own pool allocator and some one-time global init
+# that Valgrind may report as "still reachable". These are not
+# actual leaks — they are freed at process exit.
+#
+# ALSA (libasound) also has known "possibly lost" allocations from
+# its config parsing and plugin loading that are not real leaks.
+
+# ---------------------------------------------------------------------------
+# PJSIP internals
+# ---------------------------------------------------------------------------
+
+{
+   pjsip_pool_factory_create
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:pj_pool_create_on_buf
+   ...
+}
+
+{
+   pjsip_pool_alloc
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:pj_pool_alloc
+   ...
+}
+
+{
+   pjlib_init
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:pj_init
+   ...
+}
+
+{
+   pjsua_create_global
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:pjsua_create
+   ...
+}
+
+# ---------------------------------------------------------------------------
+# ALSA (libasound) — config parsing, plugin loading, device enumeration
+# These are known benign allocations in the ALSA library.
+# ---------------------------------------------------------------------------
+
+{
+   alsa_all_leaks
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   obj:*/libasound.so*
+   ...
+}
+
+{
+   alsa_module_leaks
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   obj:*/alsa-lib/*
+   ...
+}
+
+{
+   alsa_snd_config
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   fun:snd_config*
+   ...
+}
+
+{
+   alsa_snd_pcm
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   fun:snd_pcm*
+   ...
+}
+
+{
+   alsa_snd_ctl
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   fun:snd_ctl*
+   ...
+}
+
+{
+   alsa_snd_determine_driver
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   fun:snd_determine_driver
+   ...
+}
+
+# ---------------------------------------------------------------------------
+# PulseAudio
+# ---------------------------------------------------------------------------
+
+{
+   pulseaudio_all
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   obj:*/libpulse*.so*
+   ...
+}
+
+# ---------------------------------------------------------------------------
+# JACK audio
+# ---------------------------------------------------------------------------
+
+{
+   jack_all
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   obj:*/libjack*.so*
+   ...
+}
+
+# ---------------------------------------------------------------------------
+# System libraries (dlopen, GLib, etc.)
+# ---------------------------------------------------------------------------
+
+{
+   dlopen_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   fun:dlopen*
+   ...
+}
+
+{
+   glib_init
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   obj:*/libglib*.so*
+   ...
+}
+
+{
+   dbus_init
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   obj:*/libdbus*.so*
+   ...
+}
+
+# ---------------------------------------------------------------------------
+# OpenMP runtime (libgomp) — one-time init via dlopen
+# ---------------------------------------------------------------------------
+
+{
+   libgomp_init
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   obj:*/libgomp.so*
+   ...
+}
+
+# ---------------------------------------------------------------------------
+# Rust standard library / test harness thread-local storage
+# ---------------------------------------------------------------------------
+
+{
+   rust_thread_init
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:*std*thread*Thread*new*
+   ...
+}
+
+{
+   rust_mpmc_context
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:*std*sync*mpmc*context*Context*new*
+   ...
+}
