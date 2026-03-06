@@ -166,6 +166,7 @@ async fn main() -> Result<()> {
                     state,
                     last_code,
                     last_reason,
+                    ..
                 } => {
                     info!(
                         "Call state: call={:?} state={} code={} reason={}",
@@ -205,6 +206,7 @@ async fn main() -> Result<()> {
                     call_id,
                     media_status,
                     conf_port,
+                    ..
                 } => {
                     info!(
                         "Media state: call={:?} status={:?} conf_port={:?}",

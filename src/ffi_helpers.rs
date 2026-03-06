@@ -29,7 +29,14 @@ impl PjString {
         }
     }
 
-    /// Get the raw pj_str_t value. The returned value borrows from this PjString.
+    /// Get a copy of the internal `pj_str_t`.
+    ///
+    /// # Safety Contract
+    ///
+    /// The returned `pj_str_t` contains a raw pointer into this `PjString`'s
+    /// backing `CString`. The caller **must** ensure this `PjString` outlives
+    /// any use of the returned `pj_str_t`. Dropping the `PjString` while the
+    /// `pj_str_t` is still in use results in a dangling pointer.
     pub fn as_pj_str(&self) -> ffi::pj_str_t {
         self.pj_str
     }

@@ -35,6 +35,20 @@ pub enum PjError {
     Config(String),
 }
 
+impl PjError {
+    /// Get the PJSIP status code if this is a `Pjsip` error.
+    ///
+    /// Useful for matching on specific error codes (e.g. checking for
+    /// timeout errors during failover decisions).
+    #[must_use]
+    pub fn status_code(&self) -> Option<i32> {
+        match self {
+            PjError::Pjsip { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+}
+
 /// Create a `PjError::Pjsip` directly from a non-zero status code.
 ///
 /// Use this instead of `check_status(status).unwrap_err()` when you already
@@ -115,6 +129,18 @@ mod tests {
     fn error_display_already_in_use() {
         let err = PjError::AlreadyInUse("conference port".into());
         assert_eq!(format!("{err}"), "Already in use: conference port");
+    }
+
+    #[test]
+    fn status_code_pjsip_error() {
+        let err = PjError::Pjsip { status: 70018, message: "test".into() };
+        assert_eq!(err.status_code(), Some(70018));
+    }
+
+    #[test]
+    fn status_code_non_pjsip_error() {
+        let err = PjError::InvalidArg("test".into());
+        assert_eq!(err.status_code(), None);
     }
 
     #[test]

@@ -49,9 +49,12 @@ pub struct ToneGenerator {
     conf_pool: Option<*mut ffi::pj_pool_t>,
 }
 
-// SAFETY: ToneGenerator's raw pointers (port, pool, conf_pool) are only
-// accessed from &self/&mut self methods. The underlying PJSIP objects are not
-// accessed concurrently — they are used from a single owner at a time.
+// SAFETY: Once registered with the conference bridge, the tone generator port
+// is accessed by PJSIP's worker thread for audio frame retrieval. The
+// ToneGenerator struct methods (add_to_conference, remove_from_conference, drop,
+// play_digits, play_tones, stop) synchronise with PJSIP through the PJSUA API,
+// which acquires PJSIP's internal mutex. The raw pointers are pool-allocated by
+// PJSIP and remain valid until explicitly released in Drop.
 unsafe impl Send for ToneGenerator {}
 
 impl std::fmt::Debug for ToneGenerator {

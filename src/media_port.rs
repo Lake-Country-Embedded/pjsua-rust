@@ -53,9 +53,12 @@ pub struct CustomPort {
     conf_pool: Option<*mut ffi::pj_pool_t>,
 }
 
-// SAFETY: CustomPort's raw pointers (raw_port, _impl_box, conf_pool) are only
-// accessed from &self/&mut self methods. The underlying PJSIP objects are not
-// accessed concurrently — they are used from a single owner at a time.
+// SAFETY: Once registered with the conference bridge, the MediaPort impl is
+// exclusively accessed by PJSIP's worker thread via the trampoline callbacks.
+// The CustomPort struct methods (add_to_conference, remove_from_conference, drop)
+// synchronise with PJSIP through conf_add_port/conf_remove_port, which acquire
+// PJSIP's internal mutex. Before registration and after removal, no concurrent
+// access occurs. The raw pointers are heap-stable (Box::into_raw).
 unsafe impl Send for CustomPort {}
 
 impl std::fmt::Debug for CustomPort {
@@ -152,41 +155,53 @@ impl Drop for CustomPort {
     }
 }
 
+/// Trampoline for `get_frame` — called by PJSIP's conference bridge from a
+/// worker thread. Wrapped in `catch_unwind` to prevent panics in user
+/// `MediaPort` implementations from unwinding across C frames (which is UB).
 unsafe extern "C" fn trampoline_get_frame(
     this_port: *mut ffi::pjmedia_port,
     frame: *mut ffi::pjmedia_frame,
 ) -> i32 {
-    let impl_ptr = (*this_port).port_data.pdata as *mut Box<dyn MediaPort>;
-    let port_impl = &mut *impl_ptr;
-    let buf = (*frame).buf as *mut i16;
-    let sample_count = (*frame).size as usize / 2;
-    let samples = std::slice::from_raw_parts_mut(buf, sample_count);
-    samples.fill(0);
-    let mut audio_frame = AudioFrame { samples, timestamp: (*frame).timestamp.u64_ };
-    match port_impl.get_frame(&mut audio_frame) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let impl_ptr = (*this_port).port_data.pdata as *mut Box<dyn MediaPort>;
+        let port_impl = &mut *impl_ptr;
+        let buf = (*frame).buf as *mut i16;
+        let sample_count = (*frame).size / 2;
+        let samples = std::slice::from_raw_parts_mut(buf, sample_count);
+        samples.fill(0);
+        let mut audio_frame = AudioFrame { samples, timestamp: (*frame).timestamp.u64_ };
+        match port_impl.get_frame(&mut audio_frame) {
+            Ok(()) => 0,
+            Err(_) => -1,
+        }
+    }));
+    result.unwrap_or(-1)
 }
 
+/// Trampoline for `put_frame` — called by PJSIP's conference bridge from a
+/// worker thread. Wrapped in `catch_unwind` to prevent panics in user
+/// `MediaPort` implementations from unwinding across C frames (which is UB).
 unsafe extern "C" fn trampoline_put_frame(
     this_port: *mut ffi::pjmedia_port,
     frame: *mut ffi::pjmedia_frame,
 ) -> i32 {
-    let impl_ptr = (*this_port).port_data.pdata as *mut Box<dyn MediaPort>;
-    let port_impl = &mut *impl_ptr;
-    let buf = (*frame).buf as *mut i16;
-    let size_bytes = (*frame).size as usize;
-    if buf.is_null() || size_bytes == 0 {
-        return 0;
-    }
-    let sample_count = size_bytes / 2;
-    let samples = std::slice::from_raw_parts_mut(buf, sample_count);
-    let audio_frame = AudioFrame { samples, timestamp: (*frame).timestamp.u64_ };
-    match port_impl.put_frame(&audio_frame) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let impl_ptr = (*this_port).port_data.pdata as *mut Box<dyn MediaPort>;
+        let port_impl = &mut *impl_ptr;
+        let buf = (*frame).buf as *mut i16;
+        let size_bytes = (*frame).size;
+        if buf.is_null() || size_bytes == 0 {
+            return 0;
+        }
+        let sample_count = size_bytes / 2;
+        let samples = std::slice::from_raw_parts_mut(buf, sample_count);
+        let audio_frame = AudioFrame { samples, timestamp: (*frame).timestamp.u64_ };
+        match port_impl.put_frame(&audio_frame) {
+            Ok(()) => 0,
+            Err(_) => -1,
+        }
+    }));
+    result.unwrap_or(-1)
 }
 
 /// No-op: actual cleanup is done in `CustomPort::drop`, which removes the port

@@ -18,15 +18,31 @@ use crate::types::*;
 /// Guard against double initialisation.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
+/// Flag for `pjsua_call_reinvite` to take a call off hold.
+const PJSUA_CALL_UNHOLD: u32 = 1;
+
 /// RAII wrapper around the PJSUA library.
 ///
 /// Only one instance may exist at a time. Creating a second instance while
 /// the first is alive returns [`PjError::AlreadyInitialized`].
 ///
 /// Dropping the value calls `pjsua_destroy()`.
+///
+/// # Thread Safety
+///
+/// `PjsuaApp` is `Send + Sync`. The PJSUA API (as opposed to lower-level
+/// PJSIP/PJLIB APIs) is designed for multi-threaded use — all public
+/// functions acquire PJSIP's internal mutex before accessing shared state.
+/// This makes it safe to share a `PjsuaApp` across threads via `Arc`.
 pub struct PjsuaApp {
     _private: (), // prevent external construction
 }
+
+// SAFETY: PJSUA functions (pjsua_*) acquire PJSIP's internal locking before
+// accessing shared state. The PJSUA layer is explicitly designed for
+// multi-threaded applications — see PJSIP documentation on thread safety.
+// This allows `Arc<PjsuaApp>` to be shared across Tokio tasks in the daemon.
+unsafe impl Sync for PjsuaApp {}
 
 impl std::fmt::Debug for PjsuaApp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -152,6 +168,11 @@ impl PjsuaApp {
                 tp_cfg.tls_setting.ca_list_file = s.as_pj_str();
                 strings.push(s);
             }
+            if let Some(ref ca_path) = tls_cfg.ca_list_path {
+                let s = PjString::new(ca_path);
+                tp_cfg.tls_setting.ca_list_path = s.as_pj_str();
+                strings.push(s);
+            }
             if let Some(ref cert) = tls_cfg.cert_file {
                 let s = PjString::new(cert);
                 tp_cfg.tls_setting.cert_file = s.as_pj_str();
@@ -234,11 +255,11 @@ impl PjsuaApp {
         let status = unsafe { ffi::pjsua_acc_get_info(id.0, &mut info) };
         check_status(status)?;
 
-        let code = info.status as u32;
+        let code = info.status;
         Ok(AccountInfo {
             account_id: AccountId(info.id),
             uri: pj_str_to_string(&info.acc_uri),
-            is_registered: code >= 200 && code < 300,
+            is_registered: (200..300).contains(&code),
             status_code: code,
             status_text: pj_str_to_string(&info.status_text),
         })
@@ -293,7 +314,7 @@ impl PjsuaApp {
     /// Take a call off hold (re-INVITE with unhold).
     pub fn unhold_call(&self, call: CallId) -> Result<()> {
         let status = unsafe {
-            ffi::pjsua_call_reinvite(call.0, 1 /* PJSUA_CALL_UNHOLD */, ptr::null())
+            ffi::pjsua_call_reinvite(call.0, PJSUA_CALL_UNHOLD, ptr::null())
         };
         check_status(status)
     }
@@ -314,6 +335,12 @@ impl PjsuaApp {
         Ok(())
     }
 
+    /// Get the number of active calls.
+    #[must_use]
+    pub fn get_call_count(&self) -> u32 {
+        unsafe { ffi::pjsua_call_get_count() }
+    }
+
     /// Retrieve information about a call.
     pub fn get_call_info(&self, call: CallId) -> Result<CallInfo> {
         let mut info: ffi::pjsua_call_info = Default::default();
@@ -331,7 +358,7 @@ impl PjsuaApp {
                 + (info.connect_duration.msec as u64),
             total_duration_ms: (info.total_duration.sec as u64) * 1000
                 + (info.total_duration.msec as u64),
-            last_status_code: info.last_status as u32,
+            last_status_code: info.last_status,
         })
     }
 
@@ -404,7 +431,7 @@ impl PjsuaApp {
         port: *mut ffi::pjmedia_port,
     ) -> Result<(ConfPort, *mut ffi::pj_pool_t)> {
         let pool = unsafe {
-            ffi::pjsua_pool_create(b"conf-port\0".as_ptr() as *const i8, 512, 512)
+            ffi::pjsua_pool_create(c"conf-port".as_ptr(), 512, 512)
         };
         if pool.is_null() {
             return Err(PjError::Pjsip {
@@ -634,6 +661,13 @@ impl PjsuaApp {
 ///
 /// Returns the config and a `Vec<PjString>` that must be kept alive for the
 /// duration of any FFI call that uses the config.
+///
+/// # String Lifetimes
+///
+/// PJSUA's `pjsua_acc_add` and `pjsua_acc_modify` **copy** all string data
+/// from the config into an internal pool, so the returned `PjString` values
+/// only need to survive through the FFI call itself. After the call returns,
+/// PJSUA holds its own copies and does not reference the original pointers.
 fn build_acc_cfg(config: &AccountConfig) -> (ffi::pjsua_acc_config, Vec<PjString>) {
     let mut acc_cfg: ffi::pjsua_acc_config = Default::default();
     unsafe { ffi::pjsua_acc_config_default(&mut acc_cfg) };
@@ -689,13 +723,16 @@ fn build_acc_cfg(config: &AccountConfig) -> (ffi::pjsua_acc_config, Vec<PjString
 impl Drop for PjsuaApp {
     fn drop(&mut self) {
         info!("destroying PJSUA");
-        // 1. Stop worker threads — prevents callbacks from firing during teardown
+        // Teardown order matters for safety:
+        //
+        // 1. Stop worker threads — prevents NEW callbacks from being dispatched.
+        // 2. Clear event channel — any in-flight callback that races past step 1
+        //    will see None in EVENT_TX and silently drop the event.
+        // 3. Destroy PJSUA — tears down all PJSIP state (accounts, calls, etc.).
+        // 4. Reset the singleton flag — allows a new PjsuaApp to be created.
         unsafe { ffi::pjsua_stop_worker_threads() };
-        // 2. Clear event channel — any straggling callbacks silently drop
         event::clear_event_sender();
-        // 3. Destroy PJSUA
         unsafe { ffi::pjsua_destroy() };
-        // 4. Reset the singleton flag
         INITIALIZED.store(false, Ordering::SeqCst);
     }
 }

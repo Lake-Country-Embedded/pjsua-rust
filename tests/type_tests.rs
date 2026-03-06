@@ -42,12 +42,14 @@ fn test_sip_event_variants() {
         },
         SipEvent::CallState {
             call_id: CallId(0),
+            account_id: AccountId(0),
             state: CallState::Confirmed,
             last_code: 200,
             last_reason: "OK".into(),
         },
         SipEvent::CallMediaState {
             call_id: CallId(0),
+            account_id: AccountId(0),
             media_status: MediaStatus::Active,
             conf_port: Some(ConfPort(1)),
         },

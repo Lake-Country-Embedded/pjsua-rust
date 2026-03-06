@@ -77,18 +77,13 @@ impl fmt::Display for RecorderId {
 // ---------------------------------------------------------------------------
 
 /// SIP transport type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TransportType {
+    #[default]
     Udp,
     Tcp,
     Tls,
-}
-
-impl Default for TransportType {
-    fn default() -> Self {
-        TransportType::Udp
-    }
 }
 
 impl TransportType {
@@ -113,18 +108,13 @@ impl fmt::Display for TransportType {
 }
 
 /// SRTP usage mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SrtpMode {
+    #[default]
     Disabled,
     Optional,
     Mandatory,
-}
-
-impl Default for SrtpMode {
-    fn default() -> Self {
-        SrtpMode::Disabled
-    }
 }
 
 impl SrtpMode {
@@ -301,6 +291,8 @@ pub struct ConfPortInfo {
 pub struct TlsConfig {
     /// Path to CA certificate list file.
     pub ca_list_file: Option<String>,
+    /// Path to a directory of CA certificates (e.g. `/etc/ssl/certs/`).
+    pub ca_list_path: Option<String>,
     /// Path to the certificate file.
     pub cert_file: Option<String>,
     /// Path to the private key file.
@@ -367,6 +359,28 @@ pub struct AccountConfig {
     pub registrar: Option<String>,
     /// Outbound proxy URI.
     pub proxy: Option<String>,
+}
+
+impl Default for AccountConfig {
+    fn default() -> Self {
+        AccountConfig {
+            name: String::new(),
+            username: String::new(),
+            password: String::new(),
+            server: String::new(),
+            port: 5060,
+            transport: TransportType::Udp,
+            srtp: SrtpMode::Disabled,
+            access_code: None,
+            display_name: None,
+            auth_username: None,
+            realm: None,
+            reg_timeout: None,
+            use_sips: false,
+            registrar: None,
+            proxy: None,
+        }
+    }
 }
 
 impl AccountConfig {
@@ -500,6 +514,7 @@ mod tests {
     fn tls_config_default() {
         let cfg = TlsConfig::default();
         assert!(cfg.ca_list_file.is_none());
+        assert!(cfg.ca_list_path.is_none());
         assert!(cfg.cert_file.is_none());
         assert!(cfg.privkey_file.is_none());
         assert!(cfg.password.is_none());
@@ -636,6 +651,22 @@ mod tests {
         assert_eq!(format!("{}", ConfPort(0)), "0");
         assert_eq!(format!("{}", PlayerId(2)), "2");
         assert_eq!(format!("{}", RecorderId(7)), "7");
+    }
+
+    #[test]
+    fn account_config_default() {
+        let cfg = AccountConfig::default();
+        assert_eq!(cfg.port, 5060);
+        assert_eq!(cfg.transport, TransportType::Udp);
+        assert_eq!(cfg.srtp, SrtpMode::Disabled);
+        assert!(!cfg.use_sips);
+        assert!(cfg.access_code.is_none());
+        assert!(cfg.display_name.is_none());
+        assert!(cfg.auth_username.is_none());
+        assert!(cfg.realm.is_none());
+        assert!(cfg.reg_timeout.is_none());
+        assert!(cfg.registrar.is_none());
+        assert!(cfg.proxy.is_none());
     }
 
     #[test]

@@ -35,6 +35,7 @@ pub enum SipEvent {
     /// The state of a call has changed.
     CallState {
         call_id: CallId,
+        account_id: AccountId,
         state: CallState,
         last_code: u16,
         last_reason: String,
@@ -42,6 +43,7 @@ pub enum SipEvent {
     /// The media state of a call has changed.
     CallMediaState {
         call_id: CallId,
+        account_id: AccountId,
         media_status: MediaStatus,
         conf_port: Option<ConfPort>,
     },
@@ -105,7 +107,7 @@ pub(crate) unsafe extern "C" fn on_reg_state(acc_id: ffi::pjsua_acc_id) {
 
     let code = info.status as u16;
     let reason = pj_str_to_string(&info.status_text);
-    let is_registered = code >= 200 && code < 300;
+    let is_registered = (200..300).contains(&code);
 
     send_event(SipEvent::RegistrationState {
         account_id: AccountId(acc_id),
@@ -155,6 +157,7 @@ pub(crate) unsafe extern "C" fn on_call_state(
 
     send_event(SipEvent::CallState {
         call_id: CallId(call_id),
+        account_id: AccountId(info.acc_id),
         state,
         last_code,
         last_reason,
@@ -179,6 +182,7 @@ pub(crate) unsafe extern "C" fn on_call_media_state(call_id: ffi::pjsua_call_id)
 
     send_event(SipEvent::CallMediaState {
         call_id: CallId(call_id),
+        account_id: AccountId(info.acc_id),
         media_status,
         conf_port,
     });
@@ -268,6 +272,7 @@ mod tests {
     fn sip_event_call_state_debug() {
         let event = SipEvent::CallState {
             call_id: CallId(42),
+            account_id: AccountId(0),
             state: CallState::Confirmed,
             last_code: 200,
             last_reason: "OK".into(),
@@ -281,6 +286,7 @@ mod tests {
     fn sip_event_media_state_debug() {
         let event = SipEvent::CallMediaState {
             call_id: CallId(0),
+            account_id: AccountId(0),
             media_status: MediaStatus::Active,
             conf_port: Some(ConfPort(1)),
         };

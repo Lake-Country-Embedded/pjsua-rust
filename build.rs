@@ -14,7 +14,7 @@ fn main() {
 
     // Parse version for comparison
     let parts: Vec<u32> = version
-        .split(|c: char| c == '.' || c == '-')
+        .split(['.', '-'])
         .filter_map(|s| s.parse().ok())
         .collect();
     let (major, minor) = (
@@ -47,22 +47,25 @@ fn main() {
     }
 
     // Add GCC system include paths so libclang can find stddef.h etc.
-    // Derive the GCC triple from the cargo TARGET to support cross-compilation.
-    let target = env::var("TARGET").unwrap_or_default();
-    let gcc_triple = target.replace("-unknown-", "-").replace("-none-", "-");
-    let gcc_base = PathBuf::from(format!("/usr/lib/gcc/{gcc_triple}"));
-    let gcc_include = gcc_base
-        .read_dir()
-        .ok()
-        .and_then(|mut entries| {
-            entries.find_map(|e| {
-                let e = e.ok()?;
-                let p = e.path().join("include");
-                if p.is_dir() { Some(p) } else { None }
-            })
-        });
-    if let Some(path) = gcc_include {
-        builder = builder.clang_arg(format!("-isystem{}", path.display()));
+    // Skip detection if BINDGEN_EXTRA_CLANG_ARGS is set (Yocto sets this
+    // with the correct sysroot and system include paths).
+    if env::var("BINDGEN_EXTRA_CLANG_ARGS").is_err() {
+        let target = env::var("TARGET").unwrap_or_default();
+        let gcc_triple = target.replace("-unknown-", "-").replace("-none-", "-");
+        let gcc_base = PathBuf::from(format!("/usr/lib/gcc/{gcc_triple}"));
+        let gcc_include = gcc_base
+            .read_dir()
+            .ok()
+            .and_then(|mut entries| {
+                entries.find_map(|e| {
+                    let e = e.ok()?;
+                    let p = e.path().join("include");
+                    if p.is_dir() { Some(p) } else { None }
+                })
+            });
+        if let Some(path) = gcc_include {
+            builder = builder.clang_arg(format!("-isystem{}", path.display()));
+        }
     }
 
     // Allowlist PJSUA functions
