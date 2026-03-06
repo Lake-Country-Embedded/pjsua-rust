@@ -55,10 +55,16 @@ fn test_sip_event_variants() {
             call_id: CallId(0),
             digit: '5',
         },
+        SipEvent::TransferStatus {
+            call_id: CallId(0),
+            status_code: 200,
+            status_text: "OK".into(),
+            is_final: true,
+        },
     ];
     for event in &events {
         let debug = format!("{:?}", event);
         assert!(!debug.is_empty());
     }
-    assert_eq!(events.len(), 5);
+    assert_eq!(events.len(), 6);
 }

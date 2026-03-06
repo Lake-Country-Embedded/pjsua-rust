@@ -74,6 +74,7 @@ impl PjsuaApp {
         ua_cfg.cb.on_call_state = Some(event::on_call_state);
         ua_cfg.cb.on_call_media_state = Some(event::on_call_media_state);
         ua_cfg.cb.on_dtmf_digit2 = Some(event::on_dtmf_digit2);
+        ua_cfg.cb.on_call_transfer_status = Some(event::on_call_transfer_status);
 
         // --- logging config ---
         let mut log_cfg: ffi::pjsua_logging_config = Default::default();
@@ -123,21 +124,51 @@ impl PjsuaApp {
     // ------------------------------------------------------------------
 
     /// Create a SIP transport.
+    ///
+    /// Pass `tls` to configure TLS settings for a TLS transport.
     pub fn create_transport(
         &self,
         transport_type: TransportType,
         bind_addr: Option<&str>,
         port: u16,
+        tls: Option<&TlsConfig>,
     ) -> Result<TransportId> {
         let mut tp_cfg: ffi::pjsua_transport_config = Default::default();
         unsafe { ffi::pjsua_transport_config_default(&mut tp_cfg) };
         tp_cfg.port = port as u32;
 
-        // Keep the PjString alive for the duration of the FFI call.
-        let _bind_str;
+        // Keep all PjStrings alive for the duration of the FFI call.
+        let mut strings: Vec<PjString> = Vec::new();
+
         if let Some(addr) = bind_addr {
-            _bind_str = PjString::new(addr);
-            tp_cfg.bound_addr = _bind_str.as_pj_str();
+            let bind_str = PjString::new(addr);
+            tp_cfg.bound_addr = bind_str.as_pj_str();
+            strings.push(bind_str);
+        }
+
+        if let Some(tls_cfg) = tls {
+            if let Some(ref ca) = tls_cfg.ca_list_file {
+                let s = PjString::new(ca);
+                tp_cfg.tls_setting.ca_list_file = s.as_pj_str();
+                strings.push(s);
+            }
+            if let Some(ref cert) = tls_cfg.cert_file {
+                let s = PjString::new(cert);
+                tp_cfg.tls_setting.cert_file = s.as_pj_str();
+                strings.push(s);
+            }
+            if let Some(ref key) = tls_cfg.privkey_file {
+                let s = PjString::new(key);
+                tp_cfg.tls_setting.privkey_file = s.as_pj_str();
+                strings.push(s);
+            }
+            if let Some(ref pw) = tls_cfg.password {
+                let s = PjString::new(pw);
+                tp_cfg.tls_setting.password = s.as_pj_str();
+                strings.push(s);
+            }
+            tp_cfg.tls_setting.verify_server = if tls_cfg.verify_server { 1 } else { 0 };
+            tp_cfg.tls_setting.verify_client = if tls_cfg.verify_client { 1 } else { 0 };
         }
 
         let mut tp_id: ffi::pjsua_transport_id = -1;
@@ -149,42 +180,41 @@ impl PjsuaApp {
         Ok(TransportId(tp_id))
     }
 
+    /// Close a SIP transport.
+    ///
+    /// If `force` is false, the transport will be closed gracefully (waiting
+    /// for pending transactions). If `force` is true, it is closed immediately.
+    pub fn close_transport(&self, id: TransportId, force: bool) -> Result<()> {
+        let status =
+            unsafe { ffi::pjsua_transport_close(id.0, if force { 1 } else { 0 }) };
+        check_status(status)?;
+        debug!("transport closed: id={} force={force}", id.0);
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Account management
     // ------------------------------------------------------------------
 
     /// Register a SIP account and return its ID.
     pub fn add_account(&self, config: &AccountConfig) -> Result<AccountId> {
-        let mut acc_cfg: ffi::pjsua_acc_config = Default::default();
-        unsafe { ffi::pjsua_acc_config_default(&mut acc_cfg) };
-
-        // Build strings — all must stay alive until after pjsua_acc_add.
-        let uri_str = PjString::new(&config.sip_uri());
-        let reg_str = PjString::new(&config.registrar_uri());
-        let realm_str = PjString::new("*");
-        let scheme_str = PjString::new("digest");
-        let username_str = PjString::new(&config.username);
-        let password_str = PjString::new(&config.password);
-
-        acc_cfg.id = uri_str.as_pj_str();
-        acc_cfg.reg_uri = reg_str.as_pj_str();
-
-        // Credentials
-        acc_cfg.cred_count = 1;
-        acc_cfg.cred_info[0].realm = realm_str.as_pj_str();
-        acc_cfg.cred_info[0].scheme = scheme_str.as_pj_str();
-        acc_cfg.cred_info[0].username = username_str.as_pj_str();
-        acc_cfg.cred_info[0].data_type = 0; // PJSIP_CRED_DATA_PLAIN_PASSWD
-        acc_cfg.cred_info[0].data = password_str.as_pj_str();
-
-        // SRTP
-        acc_cfg.use_srtp = config.srtp.to_pjsip();
+        let (acc_cfg, _strings) = build_acc_cfg(config);
 
         let mut acc_id: ffi::pjsua_acc_id = -1;
         let status = unsafe { ffi::pjsua_acc_add(&acc_cfg, 0, &mut acc_id) };
         check_status(status)?;
         info!("account added: id={acc_id} name={}", config.name);
         Ok(AccountId(acc_id))
+    }
+
+    /// Modify an existing SIP account's configuration.
+    pub fn modify_account(&self, id: AccountId, config: &AccountConfig) -> Result<()> {
+        let (acc_cfg, _strings) = build_acc_cfg(config);
+
+        let status = unsafe { ffi::pjsua_acc_modify(id.0, &acc_cfg) };
+        check_status(status)?;
+        info!("account modified: id={} name={}", id.0, config.name);
+        Ok(())
     }
 
     /// Unregister and delete a SIP account.
@@ -254,9 +284,33 @@ impl PjsuaApp {
         check_status(status)
     }
 
+    /// Place a call on hold.
+    pub fn hold_call(&self, call: CallId) -> Result<()> {
+        let status = unsafe { ffi::pjsua_call_set_hold(call.0, ptr::null()) };
+        check_status(status)
+    }
+
+    /// Take a call off hold (re-INVITE with unhold).
+    pub fn unhold_call(&self, call: CallId) -> Result<()> {
+        let status = unsafe {
+            ffi::pjsua_call_reinvite(call.0, 1 /* PJSUA_CALL_UNHOLD */, ptr::null())
+        };
+        check_status(status)
+    }
+
     /// Hang up all active calls.
     pub fn hangup_all(&self) -> Result<()> {
         unsafe { ffi::pjsua_call_hangup_all() };
+        Ok(())
+    }
+
+    /// Transfer (REFER) a call to the given destination URI.
+    pub fn transfer_call(&self, call: CallId, destination: &str) -> Result<()> {
+        let dest = PjString::new(destination);
+        let pj_dest = dest.as_pj_str();
+        let status = unsafe { ffi::pjsua_call_xfer(call.0, &pj_dest, ptr::null()) };
+        check_status(status)?;
+        debug!("call transferred: call_id={} dest={destination}", call.0);
         Ok(())
     }
 
@@ -303,6 +357,34 @@ impl PjsuaApp {
         check_status(status)
     }
 
+    /// Adjust the transmit (TX) level of a conference port.
+    ///
+    /// `level` is a linear factor: 1.0 = no change, 0.0 = mute, 2.0 = double.
+    pub fn conf_adjust_tx_level(&self, port: ConfPort, level: f32) -> Result<()> {
+        let status = unsafe { ffi::pjsua_conf_adjust_tx_level(port.0, level) };
+        check_status(status)
+    }
+
+    /// Adjust the receive (RX) level of a conference port.
+    ///
+    /// `level` is a linear factor: 1.0 = no change, 0.0 = mute, 2.0 = double.
+    pub fn conf_adjust_rx_level(&self, port: ConfPort, level: f32) -> Result<()> {
+        let status = unsafe { ffi::pjsua_conf_adjust_rx_level(port.0, level) };
+        check_status(status)
+    }
+
+    /// Get the signal level of a conference port.
+    ///
+    /// Returns `(tx_level, rx_level)` as unsigned integer values (0-255).
+    pub fn conf_get_signal_level(&self, port: ConfPort) -> Result<(u32, u32)> {
+        let mut tx: u32 = 0;
+        let mut rx: u32 = 0;
+        let status =
+            unsafe { ffi::pjsua_conf_get_signal_level(port.0, &mut tx, &mut rx) };
+        check_status(status)?;
+        Ok((tx, rx))
+    }
+
     // ------------------------------------------------------------------
     // Conference bridge port management
     // ------------------------------------------------------------------
@@ -312,7 +394,7 @@ impl PjsuaApp {
     ///
     /// The caller **must** release the returned pool (via `pj_pool_release`)
     /// after calling `conf_remove_port`. Failing to do so leaks memory.
-    /// [`CustomPort`] and [`ToneGenerator`] handle this automatically.
+    /// [`CustomPort`](crate::CustomPort) and [`ToneGenerator`](crate::ToneGenerator) handle this automatically.
     ///
     /// # Safety
     /// The caller must ensure the `pjmedia_port` pointer is valid and remains
@@ -483,20 +565,61 @@ impl PjsuaApp {
     // DTMF
     // ------------------------------------------------------------------
 
-    /// Send DTMF digits on a call using RFC 2833.
+    /// Send DTMF digits on a call.
     ///
-    /// The `method` parameter is accepted for API compatibility but the
-    /// underlying `pjsua_call_dial_dtmf` always uses RFC 2833.
-    pub fn send_dtmf(&self, call: CallId, digits: &str, _method: DtmfMethod) -> Result<()> {
+    /// Uses `pjsua_call_dial_dtmf` for RFC 2833 and
+    /// `pjsua_call_send_dtmf_param` for SIP-INFO.
+    pub fn send_dtmf(&self, call: CallId, digits: &str, method: DtmfMethod) -> Result<()> {
         let digits_str = PjString::new(digits);
         let pj_digits = digits_str.as_pj_str();
-        let status = unsafe { ffi::pjsua_call_dial_dtmf(call.0, &pj_digits) };
-        check_status(status)
+
+        match method {
+            DtmfMethod::Rfc2833 => {
+                let status = unsafe { ffi::pjsua_call_dial_dtmf(call.0, &pj_digits) };
+                check_status(status)
+            }
+            DtmfMethod::SipInfo => {
+                let mut param: ffi::pjsua_call_send_dtmf_param = Default::default();
+                unsafe { ffi::pjsua_call_send_dtmf_param_default(&mut param) };
+                param.method = ffi::pjsua_dtmf_method_PJSUA_DTMF_METHOD_SIP_INFO;
+                param.digits = pj_digits;
+                let status = unsafe { ffi::pjsua_call_send_dtmf(call.0, &param) };
+                check_status(status)
+            }
+        }
     }
 
     // ------------------------------------------------------------------
     // Codec
     // ------------------------------------------------------------------
+
+    /// Verify that a string is a valid SIP URL.
+    ///
+    /// Returns `Ok(())` if valid, `Err(PjError::InvalidArg)` otherwise.
+    pub fn verify_sip_url(&self, url: &str) -> Result<()> {
+        let c_url = std::ffi::CString::new(url)
+            .map_err(|_| PjError::InvalidArg("URL contains null byte".into()))?;
+        let status = unsafe { ffi::pjsua_verify_sip_url(c_url.as_ptr()) };
+        if status != 0 {
+            return Err(PjError::InvalidArg(format!("invalid SIP URL: {url}")));
+        }
+        Ok(())
+    }
+
+    /// Check if the sound device is currently active.
+    #[must_use]
+    pub fn is_sound_active(&self) -> bool {
+        unsafe { ffi::pjsua_snd_is_active() != 0 }
+    }
+
+    /// Stop PJSUA worker threads.
+    ///
+    /// This stops background threads that deliver callbacks, useful for
+    /// ensuring no callbacks fire during teardown. Called automatically
+    /// during `Drop`.
+    pub fn stop_worker_threads(&self) {
+        unsafe { ffi::pjsua_stop_worker_threads() };
+    }
 
     /// Set the priority of a codec (0 = disabled, 255 = highest).
     pub fn set_codec_priority(&self, codec: &str, priority: u8) -> Result<()> {
@@ -507,11 +630,72 @@ impl PjsuaApp {
     }
 }
 
+/// Build a `pjsua_acc_config` from an `AccountConfig`.
+///
+/// Returns the config and a `Vec<PjString>` that must be kept alive for the
+/// duration of any FFI call that uses the config.
+fn build_acc_cfg(config: &AccountConfig) -> (ffi::pjsua_acc_config, Vec<PjString>) {
+    let mut acc_cfg: ffi::pjsua_acc_config = Default::default();
+    unsafe { ffi::pjsua_acc_config_default(&mut acc_cfg) };
+
+    let mut strings = Vec::new();
+
+    let uri_str = PjString::new(&config.sip_uri());
+    acc_cfg.id = uri_str.as_pj_str();
+    strings.push(uri_str);
+
+    let reg_str = PjString::new(&config.registrar_uri());
+    acc_cfg.reg_uri = reg_str.as_pj_str();
+    strings.push(reg_str);
+
+    // Credentials
+    let realm_val = config.realm.as_deref().unwrap_or("*");
+    let realm_str = PjString::new(realm_val);
+    let scheme_str = PjString::new("digest");
+    let cred_username = config.auth_username.as_deref().unwrap_or(&config.username);
+    let username_str = PjString::new(cred_username);
+    let password_str = PjString::new(&config.password);
+
+    acc_cfg.cred_count = 1;
+    acc_cfg.cred_info[0].realm = realm_str.as_pj_str();
+    acc_cfg.cred_info[0].scheme = scheme_str.as_pj_str();
+    acc_cfg.cred_info[0].username = username_str.as_pj_str();
+    acc_cfg.cred_info[0].data_type = 0; // PJSIP_CRED_DATA_PLAIN_PASSWD
+    acc_cfg.cred_info[0].data = password_str.as_pj_str();
+    strings.push(realm_str);
+    strings.push(scheme_str);
+    strings.push(username_str);
+    strings.push(password_str);
+
+    // SRTP
+    acc_cfg.use_srtp = config.srtp.to_pjsip();
+
+    // Registration timeout
+    if let Some(timeout) = config.reg_timeout {
+        acc_cfg.reg_timeout = timeout;
+    }
+
+    // Outbound proxy
+    if let Some(ref proxy) = config.proxy {
+        let proxy_str = PjString::new(proxy);
+        acc_cfg.proxy_cnt = 1;
+        acc_cfg.proxy[0] = proxy_str.as_pj_str();
+        strings.push(proxy_str);
+    }
+
+    (acc_cfg, strings)
+}
+
 impl Drop for PjsuaApp {
     fn drop(&mut self) {
         info!("destroying PJSUA");
-        event::clear_event_sender(); // first: callbacks during destroy silently drop
+        // 1. Stop worker threads — prevents callbacks from firing during teardown
+        unsafe { ffi::pjsua_stop_worker_threads() };
+        // 2. Clear event channel — any straggling callbacks silently drop
+        event::clear_event_sender();
+        // 3. Destroy PJSUA
         unsafe { ffi::pjsua_destroy() };
+        // 4. Reset the singleton flag
         INITIALIZED.store(false, Ordering::SeqCst);
     }
 }

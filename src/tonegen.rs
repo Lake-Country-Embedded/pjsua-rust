@@ -9,23 +9,35 @@ use crate::ffi_helpers::PjString;
 use crate::types::ConfPort;
 use crate::PjsuaApp;
 
+/// Describes a single tone (dual-frequency) for playback.
 #[derive(Debug, Clone, Copy)]
 pub struct ToneDesc {
+    /// First frequency in Hz (0 to disable).
     pub freq1: i16,
+    /// Second frequency in Hz (0 to disable).
     pub freq2: i16,
+    /// Duration of the tone in milliseconds.
     pub on_ms: i16,
+    /// Silence after the tone in milliseconds.
     pub off_ms: i16,
+    /// Volume (0 = default).
     pub volume: i16,
 }
 
+/// Describes a single DTMF digit for playback.
 #[derive(Debug, Clone, Copy)]
 pub struct DtmfDigit {
+    /// The digit character ('0'-'9', '*', '#', 'A'-'D').
     pub digit: char,
+    /// Duration of the digit tone in milliseconds.
     pub on_ms: i16,
+    /// Silence after the digit in milliseconds.
     pub off_ms: i16,
+    /// Volume (0 = default).
     pub volume: i16,
 }
 
+/// A tone generator media port for DTMF and custom tone playback.
 pub struct ToneGenerator {
     port: *mut ffi::pjmedia_port,
     pool: *mut ffi::pj_pool_t,
@@ -51,6 +63,7 @@ impl std::fmt::Debug for ToneGenerator {
 }
 
 impl ToneGenerator {
+    /// Create a new tone generator.
     pub fn new(_app: &PjsuaApp, clock_rate: u32, channel_count: u32, samples_per_frame: u32) -> Result<Self> {
         let pool_name = CString::new("tonegen").unwrap();
         let pool = unsafe { ffi::pjsua_pool_create(pool_name.as_ptr(), 4096, 4096) };
@@ -71,6 +84,7 @@ impl ToneGenerator {
         Ok(ToneGenerator { port, pool, _name: name, conf_port: None, conf_pool: None })
     }
 
+    /// Add this tone generator to the conference bridge.
     pub fn add_to_conference(&mut self, app: &PjsuaApp) -> Result<ConfPort> {
         if self.conf_port.is_some() {
             return Err(PjError::AlreadyInUse("conference port".into()));
@@ -82,6 +96,7 @@ impl ToneGenerator {
         Ok(port_id)
     }
 
+    /// Remove this tone generator from the conference bridge.
     pub fn remove_from_conference(&mut self, app: &PjsuaApp) -> Result<()> {
         if let Some(port) = self.conf_port.take() {
             app.conf_remove_port(port)?;
@@ -92,6 +107,7 @@ impl ToneGenerator {
         Ok(())
     }
 
+    /// Queue DTMF digits for playback.
     pub fn play_digits(&self, digits: &[DtmfDigit]) -> Result<()> {
         if digits.is_empty() { return Ok(()); }
         let c_digits: Vec<ffi::pjmedia_tone_digit> = digits.iter().map(|d| ffi::pjmedia_tone_digit {
@@ -104,6 +120,7 @@ impl ToneGenerator {
         check_status(status)
     }
 
+    /// Queue custom tones for playback.
     pub fn play_tones(&self, tones: &[ToneDesc]) -> Result<()> {
         if tones.is_empty() { return Ok(()); }
         let c_tones: Vec<ffi::pjmedia_tone_desc> = tones.iter().map(|t| ffi::pjmedia_tone_desc {
@@ -118,16 +135,23 @@ impl ToneGenerator {
         check_status(status)
     }
 
+    /// Check if the tone generator is currently playing.
+    #[must_use]
     pub fn is_busy(&self) -> bool {
         unsafe { ffi::pjmedia_tonegen_is_busy(self.port) != 0 }
     }
 
+    /// Stop playback immediately.
     pub fn stop(&self) -> Result<()> {
         let status = unsafe { ffi::pjmedia_tonegen_stop(self.port) };
         check_status(status)
     }
 
+    /// Get the conference bridge port ID, if registered.
+    #[must_use]
     pub fn conf_port(&self) -> Option<ConfPort> { self.conf_port }
+    /// Get the raw `pjmedia_port` pointer.
+    #[must_use]
     pub fn as_raw_port(&self) -> *mut ffi::pjmedia_port { self.port }
 }
 

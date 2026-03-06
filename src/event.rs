@@ -50,6 +50,13 @@ pub enum SipEvent {
         call_id: CallId,
         digit: char,
     },
+    /// Transfer (REFER) status update.
+    TransferStatus {
+        call_id: CallId,
+        status_code: u16,
+        status_text: String,
+        is_final: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +202,34 @@ pub(crate) unsafe extern "C" fn on_dtmf_digit2(
     });
 }
 
+/// `on_call_transfer_status` callback — call transfer (REFER) status.
+pub(crate) unsafe extern "C" fn on_call_transfer_status(
+    call_id: ffi::pjsua_call_id,
+    st_code: ::std::os::raw::c_int,
+    st_text: *const ffi::pj_str_t,
+    final_: ffi::pj_bool_t,
+    p_cont: *mut ffi::pj_bool_t,
+) {
+    let status_text = if st_text.is_null() {
+        String::new()
+    } else {
+        pj_str_to_string(unsafe { &*st_text })
+    };
+    let is_final = final_ != 0;
+
+    // Continue receiving notifications unless this is the final one
+    if !p_cont.is_null() {
+        unsafe { *p_cont = if is_final { 0 } else { 1 } };
+    }
+
+    send_event(SipEvent::TransferStatus {
+        call_id: CallId(call_id),
+        status_code: st_code as u16,
+        status_text,
+        is_final,
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -263,5 +298,19 @@ mod tests {
         let debug = format!("{:?}", event);
         assert!(debug.contains("DtmfDigit"));
         assert!(debug.contains('5'));
+    }
+
+    #[test]
+    fn sip_event_transfer_status_debug() {
+        let event = SipEvent::TransferStatus {
+            call_id: CallId(1),
+            status_code: 200,
+            status_text: "OK".into(),
+            is_final: true,
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("TransferStatus"));
+        assert!(debug.contains("200"));
+        assert!(debug.contains("true"));
     }
 }

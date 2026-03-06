@@ -296,6 +296,23 @@ pub struct ConfPortInfo {
     pub listeners: Vec<ConfPort>,
 }
 
+/// TLS transport configuration.
+#[derive(Debug, Clone, Default)]
+pub struct TlsConfig {
+    /// Path to CA certificate list file.
+    pub ca_list_file: Option<String>,
+    /// Path to the certificate file.
+    pub cert_file: Option<String>,
+    /// Path to the private key file.
+    pub privkey_file: Option<String>,
+    /// Password for the private key.
+    pub password: Option<String>,
+    /// Verify server certificate.
+    pub verify_server: bool,
+    /// Verify client certificate.
+    pub verify_client: bool,
+}
+
 /// Top-level PJSUA configuration.
 #[derive(Debug, Clone)]
 pub struct PjsuaConfig {
@@ -336,17 +353,43 @@ pub struct AccountConfig {
     pub srtp: SrtpMode,
     /// Optional access code (DTMF digits to send after call connects).
     pub access_code: Option<String>,
+    /// Display name for the From header (e.g. "Alice").
+    pub display_name: Option<String>,
+    /// Authentication username (defaults to `username` if None).
+    pub auth_username: Option<String>,
+    /// Authentication realm (defaults to `"*"` if None).
+    pub realm: Option<String>,
+    /// Registration timeout in seconds.
+    pub reg_timeout: Option<u32>,
+    /// Use `sips:` URI scheme instead of `sip:`.
+    pub use_sips: bool,
+    /// Override the auto-built registrar URI.
+    pub registrar: Option<String>,
+    /// Outbound proxy URI.
+    pub proxy: Option<String>,
 }
 
 impl AccountConfig {
-    /// Build the SIP URI for this account: `sip:username@server`
+    /// Build the SIP URI for this account.
+    ///
+    /// Honors `display_name` and `use_sips`.
     pub fn sip_uri(&self) -> String {
-        format!("sip:{}@{}", self.username, self.server)
+        let scheme = if self.use_sips { "sips" } else { "sip" };
+        match &self.display_name {
+            Some(name) => format!("\"{}\" <{}:{}@{}>", name, scheme, self.username, self.server),
+            None => format!("{}:{}@{}", scheme, self.username, self.server),
+        }
     }
 
-    /// Build the registrar URI: `sip:server:port`
+    /// Build the registrar URI.
+    ///
+    /// Returns the custom `registrar` if set, otherwise `sip:server:port`.
     pub fn registrar_uri(&self) -> String {
-        format!("sip:{}:{}", self.server, self.port)
+        if let Some(ref reg) = self.registrar {
+            return reg.clone();
+        }
+        let scheme = if self.use_sips { "sips" } else { "sip" };
+        format!("{}:{}:{}", scheme, self.server, self.port)
     }
 }
 
@@ -454,6 +497,17 @@ mod tests {
     }
 
     #[test]
+    fn tls_config_default() {
+        let cfg = TlsConfig::default();
+        assert!(cfg.ca_list_file.is_none());
+        assert!(cfg.cert_file.is_none());
+        assert!(cfg.privkey_file.is_none());
+        assert!(cfg.password.is_none());
+        assert!(!cfg.verify_server);
+        assert!(!cfg.verify_client);
+    }
+
+    #[test]
     fn pjsua_config_default() {
         let cfg = PjsuaConfig::default();
         assert_eq!(cfg.log_level, 3);
@@ -472,9 +526,83 @@ mod tests {
             transport: TransportType::Udp,
             srtp: SrtpMode::Disabled,
             access_code: None,
+            display_name: None,
+            auth_username: None,
+            realm: None,
+            reg_timeout: None,
+            use_sips: false,
+            registrar: None,
+            proxy: None,
         };
         assert_eq!(cfg.sip_uri(), "sip:6013@192.168.10.10");
         assert_eq!(cfg.registrar_uri(), "sip:192.168.10.10:5060");
+    }
+
+    #[test]
+    fn account_config_sip_uri_with_display_name() {
+        let cfg = AccountConfig {
+            name: "test".into(),
+            username: "6013".into(),
+            password: "secret".into(),
+            server: "192.168.10.10".into(),
+            port: 5060,
+            transport: TransportType::Udp,
+            srtp: SrtpMode::Disabled,
+            access_code: None,
+            display_name: Some("Alice".into()),
+            auth_username: None,
+            realm: None,
+            reg_timeout: None,
+            use_sips: false,
+            registrar: None,
+            proxy: None,
+        };
+        assert_eq!(cfg.sip_uri(), "\"Alice\" <sip:6013@192.168.10.10>");
+    }
+
+    #[test]
+    fn account_config_use_sips() {
+        let cfg = AccountConfig {
+            name: "test".into(),
+            username: "6013".into(),
+            password: "secret".into(),
+            server: "192.168.10.10".into(),
+            port: 5061,
+            transport: TransportType::Tls,
+            srtp: SrtpMode::Disabled,
+            access_code: None,
+            display_name: None,
+            auth_username: None,
+            realm: None,
+            reg_timeout: None,
+            use_sips: true,
+            registrar: None,
+            proxy: None,
+        };
+        assert_eq!(cfg.sip_uri(), "sips:6013@192.168.10.10");
+        assert_eq!(cfg.registrar_uri(), "sips:192.168.10.10:5061");
+    }
+
+    #[test]
+    fn account_config_custom_registrar() {
+        let cfg = AccountConfig {
+            name: "test".into(),
+            username: "6013".into(),
+            password: "secret".into(),
+            server: "192.168.10.10".into(),
+            port: 5060,
+            transport: TransportType::Udp,
+            srtp: SrtpMode::Disabled,
+            access_code: None,
+            display_name: None,
+            auth_username: None,
+            realm: None,
+            reg_timeout: None,
+            use_sips: false,
+            registrar: Some("sip:registrar.example.com".into()),
+            proxy: None,
+        };
+        assert_eq!(cfg.registrar_uri(), "sip:registrar.example.com");
     }
 
     #[test]
@@ -521,6 +649,13 @@ mod tests {
             transport: TransportType::Udp,
             srtp: SrtpMode::Disabled,
             access_code: Some("1234".into()),
+            display_name: None,
+            auth_username: None,
+            realm: None,
+            reg_timeout: None,
+            use_sips: false,
+            registrar: None,
+            proxy: None,
         };
         assert_eq!(cfg.access_code.as_deref(), Some("1234"));
     }

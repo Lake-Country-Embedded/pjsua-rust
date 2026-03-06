@@ -69,8 +69,13 @@ pub struct TomlAccountConfig {
     #[serde(default)]
     pub srtp: SrtpMode,
     pub display_name: Option<String>,
+    pub auth_username: Option<String>,
     pub realm: Option<String>,
     pub reg_timeout: Option<u32>,
+    #[serde(default)]
+    pub use_sips: bool,
+    pub registrar: Option<String>,
+    pub proxy: Option<String>,
     pub access_code: Option<String>,
 }
 
@@ -90,6 +95,13 @@ impl TomlAccountConfig {
             transport: self.transport,
             srtp: self.srtp,
             access_code: self.access_code.clone(),
+            display_name: self.display_name.clone(),
+            auth_username: self.auth_username.clone(),
+            realm: self.realm.clone(),
+            reg_timeout: self.reg_timeout,
+            use_sips: self.use_sips,
+            registrar: self.registrar.clone(),
+            proxy: self.proxy.clone(),
         }
     }
 }

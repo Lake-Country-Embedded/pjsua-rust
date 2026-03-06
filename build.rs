@@ -47,8 +47,12 @@ fn main() {
     }
 
     // Add GCC system include paths so libclang can find stddef.h etc.
-    // Find the GCC version directory
-    let gcc_include = std::fs::read_dir("/usr/lib/gcc/x86_64-linux-gnu")
+    // Derive the GCC triple from the cargo TARGET to support cross-compilation.
+    let target = env::var("TARGET").unwrap_or_default();
+    let gcc_triple = target.replace("-unknown-", "-").replace("-none-", "-");
+    let gcc_base = PathBuf::from(format!("/usr/lib/gcc/{gcc_triple}"));
+    let gcc_include = gcc_base
+        .read_dir()
         .ok()
         .and_then(|mut entries| {
             entries.find_map(|e| {
@@ -103,14 +107,34 @@ fn main() {
         .allowlist_function("pjsua_call_reinvite")
         .allowlist_function("pjsua_call_xfer")
         .allowlist_function("pjsua_call_dial_dtmf")
-        .allowlist_function("pjsua_call_send_dtmf_param")
-        .allowlist_function("pjsua_call_dtmf_param_default")
+        .allowlist_function("pjsua_call_send_dtmf")
+        .allowlist_function("pjsua_call_send_dtmf_param_default")
         // Media / Conference
         .allowlist_function("pjsua_conf_connect")
         .allowlist_function("pjsua_conf_disconnect")
         .allowlist_function("pjsua_conf_adjust_tx_level")
         .allowlist_function("pjsua_conf_adjust_rx_level")
         .allowlist_function("pjsua_conf_get_signal_level")
+        .allowlist_function("pjsua_enum_conf_ports")
+        .allowlist_function("pjsua_conf_get_port_info")
+        .allowlist_function("pjsua_conf_add_port")
+        .allowlist_function("pjsua_conf_remove_port")
+        // Pool
+        .allowlist_function("pjsua_pool_create")
+        .allowlist_function("pj_pool_release")
+        // Sound device
+        .allowlist_function("pjsua_set_no_snd_dev")
+        .allowlist_function("pjsua_set_snd_dev")
+        .allowlist_function("pjsua_get_snd_dev")
+        // Media port
+        .allowlist_function("pjmedia_port_info_init")
+        .allowlist_function("pjmedia_port_destroy")
+        // Tone generator
+        .allowlist_function("pjmedia_tonegen_create2")
+        .allowlist_function("pjmedia_tonegen_play_digits")
+        .allowlist_function("pjmedia_tonegen_play")
+        .allowlist_function("pjmedia_tonegen_is_busy")
+        .allowlist_function("pjmedia_tonegen_stop")
         // Player / Recorder
         .allowlist_function("pjsua_player_create")
         .allowlist_function("pjsua_player_get_conf_port")
@@ -118,6 +142,8 @@ fn main() {
         .allowlist_function("pjsua_recorder_create")
         .allowlist_function("pjsua_recorder_get_conf_port")
         .allowlist_function("pjsua_recorder_destroy")
+        // Sound device
+        .allowlist_function("pjsua_snd_is_active")
         // Codec
         .allowlist_function("pjsua_codec_set_priority")
         // Buddy
@@ -150,6 +176,11 @@ fn main() {
         .allowlist_type("pj_status_t")
         .allowlist_type("pj_bool_t")
         .allowlist_type("pj_pool_t")
+        .allowlist_type("pjsua_conf_port_info")
+        .allowlist_type("pjmedia_port")
+        .allowlist_type("pjmedia_tone_digit")
+        .allowlist_type("pjmedia_tone_desc")
+        .allowlist_type("pjmedia_frame")
         // Constants
         .allowlist_var("PJSUA_INVALID_ID")
         .allowlist_var("PJSIP_MAX_URL_SIZE")

@@ -1,7 +1,7 @@
 //! Custom audio port support via the `MediaPort` trait.
 
 use tracing::debug;
-use crate::error::{check_status, make_pj_error, PjError, Result};
+use crate::error::{make_pj_error, PjError, Result};
 use crate::ffi;
 use crate::ffi_helpers::PjString;
 use crate::types::ConfPort;
@@ -23,15 +23,21 @@ impl<'a> std::fmt::Debug for AudioFrame<'a> {
 }
 
 /// Trait for implementing custom audio ports.
+///
+/// Implement this trait to create a custom audio source/sink that can be
+/// registered with the PJSUA conference bridge via [`CustomPort`].
 pub trait MediaPort: Send + 'static {
+    /// Called when the conference bridge needs audio data from this port.
     fn get_frame(&mut self, frame: &mut AudioFrame) -> Result<()> {
         let _ = frame;
         Ok(())
     }
+    /// Called when the conference bridge delivers audio data to this port.
     fn put_frame(&mut self, frame: &AudioFrame) -> Result<()> {
         let _ = frame;
         Ok(())
     }
+    /// Called when the port is being destroyed.
     fn on_destroy(&mut self) {}
 }
 
@@ -61,6 +67,7 @@ impl std::fmt::Debug for CustomPort {
 }
 
 impl CustomPort {
+    /// Create a new custom audio port wrapping a [`MediaPort`] implementation.
     pub fn new(
         _app: &PjsuaApp,
         name: &str,
@@ -100,6 +107,7 @@ impl CustomPort {
         Ok(CustomPort { raw_port, _impl_box: impl_box, _name: port_name, conf_port: None, conf_pool: None })
     }
 
+    /// Add this port to the conference bridge.
     pub fn add_to_conference(&mut self, app: &PjsuaApp) -> Result<ConfPort> {
         if self.conf_port.is_some() {
             return Err(PjError::AlreadyInUse("conference port".into()));
@@ -110,6 +118,7 @@ impl CustomPort {
         Ok(port_id)
     }
 
+    /// Remove this port from the conference bridge.
     pub fn remove_from_conference(&mut self, app: &PjsuaApp) -> Result<()> {
         if let Some(port) = self.conf_port.take() {
             app.conf_remove_port(port)?;
@@ -120,7 +129,11 @@ impl CustomPort {
         Ok(())
     }
 
+    /// Get the conference bridge port ID, if registered.
+    #[must_use]
     pub fn conf_port(&self) -> Option<ConfPort> { self.conf_port }
+    /// Get the raw `pjmedia_port` pointer.
+    #[must_use]
     pub fn as_raw_port(&self) -> *mut ffi::pjmedia_port { self.raw_port }
 }
 
