@@ -133,7 +133,10 @@ mod tests {
 
     #[test]
     fn status_code_pjsip_error() {
-        let err = PjError::Pjsip { status: 70018, message: "test".into() };
+        let err = PjError::Pjsip {
+            status: 70018,
+            message: "test".into(),
+        };
         assert_eq!(err.status_code(), Some(70018));
     }
 

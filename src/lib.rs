@@ -1,10 +1,10 @@
 //! Safe Rust bindings for PJSIP's PJSUA library.
 
+pub mod config;
+mod error;
+pub mod event;
 mod ffi;
 mod ffi_helpers;
-mod error;
-pub mod config;
-pub mod event;
 pub mod media_port;
 mod pjsua_app;
 pub mod tonegen;

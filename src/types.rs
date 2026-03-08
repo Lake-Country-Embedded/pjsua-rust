@@ -177,9 +177,7 @@ impl CallState {
             x if x == ffi::pjsip_inv_state_PJSIP_INV_STATE_EARLY => CallState::Early,
             x if x == ffi::pjsip_inv_state_PJSIP_INV_STATE_CONNECTING => CallState::Connecting,
             x if x == ffi::pjsip_inv_state_PJSIP_INV_STATE_CONFIRMED => CallState::Confirmed,
-            x if x == ffi::pjsip_inv_state_PJSIP_INV_STATE_DISCONNECTED => {
-                CallState::Disconnected
-            }
+            x if x == ffi::pjsip_inv_state_PJSIP_INV_STATE_DISCONNECTED => CallState::Disconnected,
             other => CallState::Unknown(other),
         }
     }
@@ -216,9 +214,7 @@ impl MediaStatus {
     pub fn from_pjsip(status: u32) -> Self {
         match status {
             x if x == ffi::pjsua_call_media_status_PJSUA_CALL_MEDIA_NONE => MediaStatus::None,
-            x if x == ffi::pjsua_call_media_status_PJSUA_CALL_MEDIA_ACTIVE => {
-                MediaStatus::Active
-            }
+            x if x == ffi::pjsua_call_media_status_PJSUA_CALL_MEDIA_ACTIVE => MediaStatus::Active,
             x if x == ffi::pjsua_call_media_status_PJSUA_CALL_MEDIA_LOCAL_HOLD => {
                 MediaStatus::LocalHold
             }
@@ -390,7 +386,10 @@ impl AccountConfig {
     pub fn sip_uri(&self) -> String {
         let scheme = if self.use_sips { "sips" } else { "sip" };
         match &self.display_name {
-            Some(name) => format!("\"{}\" <{}:{}@{}>", name, scheme, self.username, self.server),
+            Some(name) => format!(
+                "\"{}\" <{}:{}@{}>",
+                name, scheme, self.username, self.server
+            ),
             None => format!("{}:{}@{}", scheme, self.username, self.server),
         }
     }
@@ -448,7 +447,9 @@ mod tests {
     #[test]
     fn transport_type_deserialize() {
         #[derive(Deserialize)]
-        struct W { t: TransportType }
+        struct W {
+            t: TransportType,
+        }
         let w: W = toml::from_str("t = \"udp\"").unwrap();
         assert_eq!(w.t, TransportType::Udp);
     }
@@ -465,7 +466,9 @@ mod tests {
     #[test]
     fn srtp_mode_deserialize() {
         #[derive(Deserialize)]
-        struct W { s: SrtpMode }
+        struct W {
+            s: SrtpMode,
+        }
         let w: W = toml::from_str("s = \"disabled\"").unwrap();
         assert_eq!(w.s, SrtpMode::Disabled);
     }
@@ -690,5 +693,4 @@ mod tests {
         };
         assert_eq!(cfg.access_code.as_deref(), Some("1234"));
     }
-
 }

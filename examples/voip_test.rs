@@ -122,10 +122,7 @@ async fn main() -> Result<()> {
     .unwrap_or(false);
 
     if !reg_ok {
-        bail!(
-            "Timed out waiting for registrations (got {}/2)",
-            reg_count
-        );
+        bail!("Timed out waiting for registrations (got {}/2)", reg_count);
     }
     info!("Both accounts registered successfully");
 
@@ -176,9 +173,7 @@ async fn main() -> Result<()> {
                     if state == CallState::Confirmed && !dtmf_sent {
                         call_connected = true;
                         info!("Call confirmed! Sending DTMF: {}", DTMF_DIGITS);
-                        if let Err(e) =
-                            app.send_dtmf(call_id, DTMF_DIGITS, DtmfMethod::Rfc2833)
-                        {
+                        if let Err(e) = app.send_dtmf(call_id, DTMF_DIGITS, DtmfMethod::Rfc2833) {
                             error!("Failed to send DTMF: {}", e);
                         }
                         dtmf_sent = true;
@@ -247,11 +242,7 @@ async fn main() -> Result<()> {
     );
     println!(
         "  DTMF sent:         {}",
-        if dtmf_sent {
-            DTMF_DIGITS
-        } else {
-            "(none)"
-        }
+        if dtmf_sent { DTMF_DIGITS } else { "(none)" }
     );
     println!(
         "  DTMF received:     {}",

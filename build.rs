@@ -53,16 +53,17 @@ fn main() {
         let target = env::var("TARGET").unwrap_or_default();
         let gcc_triple = target.replace("-unknown-", "-").replace("-none-", "-");
         let gcc_base = PathBuf::from(format!("/usr/lib/gcc/{gcc_triple}"));
-        let gcc_include = gcc_base
-            .read_dir()
-            .ok()
-            .and_then(|mut entries| {
-                entries.find_map(|e| {
-                    let e = e.ok()?;
-                    let p = e.path().join("include");
-                    if p.is_dir() { Some(p) } else { None }
-                })
-            });
+        let gcc_include = gcc_base.read_dir().ok().and_then(|mut entries| {
+            entries.find_map(|e| {
+                let e = e.ok()?;
+                let p = e.path().join("include");
+                if p.is_dir() {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+        });
         if let Some(path) = gcc_include {
             builder = builder.clang_arg(format!("-isystem{}", path.display()));
         }
@@ -191,9 +192,7 @@ fn main() {
         .derive_debug(true)
         .derive_default(true);
 
-    let bindings = builder
-        .generate()
-        .expect("Failed to generate bindings");
+    let bindings = builder.generate().expect("Failed to generate bindings");
 
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings

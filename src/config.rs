@@ -217,10 +217,7 @@ access_code = "1234"
     fn test_access_code_parsed() {
         let config = Config::from_str(SAMPLE_TOML).unwrap();
         assert!(config.accounts[0].access_code.is_none());
-        assert_eq!(
-            config.accounts[1].access_code.as_deref(),
-            Some("1234")
-        );
+        assert_eq!(config.accounts[1].access_code.as_deref(), Some("1234"));
     }
 
     #[test]

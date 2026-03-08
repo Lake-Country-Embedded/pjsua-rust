@@ -57,7 +57,9 @@ async fn test_basic_call() {
 
     // Register both accounts
     let caller = config.find_account("caller").expect("No caller account");
-    let receiver = config.find_account("receiver").expect("No receiver account");
+    let receiver = config
+        .find_account("receiver")
+        .expect("No receiver account");
     let caller_cfg = caller.to_account_config();
     let receiver_cfg = receiver.to_account_config();
     let caller_id = app.add_account(&caller_cfg).expect("Failed to add caller");

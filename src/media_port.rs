@@ -1,11 +1,11 @@
 //! Custom audio port support via the `MediaPort` trait.
 
-use tracing::debug;
 use crate::error::{make_pj_error, PjError, Result};
 use crate::ffi;
 use crate::ffi_helpers::PjString;
 use crate::types::ConfPort;
 use crate::PjsuaApp;
+use tracing::debug;
 
 /// An audio frame exchanged between media ports and the conference bridge.
 pub struct AudioFrame<'a> {
@@ -107,7 +107,13 @@ impl CustomPort {
         }
 
         debug!("custom port created: name={name}");
-        Ok(CustomPort { raw_port, _impl_box: impl_box, _name: port_name, conf_port: None, conf_pool: None })
+        Ok(CustomPort {
+            raw_port,
+            _impl_box: impl_box,
+            _name: port_name,
+            conf_port: None,
+            conf_pool: None,
+        })
     }
 
     /// Add this port to the conference bridge.
@@ -134,10 +140,14 @@ impl CustomPort {
 
     /// Get the conference bridge port ID, if registered.
     #[must_use]
-    pub fn conf_port(&self) -> Option<ConfPort> { self.conf_port }
+    pub fn conf_port(&self) -> Option<ConfPort> {
+        self.conf_port
+    }
     /// Get the raw `pjmedia_port` pointer.
     #[must_use]
-    pub fn as_raw_port(&self) -> *mut ffi::pjmedia_port { self.raw_port }
+    pub fn as_raw_port(&self) -> *mut ffi::pjmedia_port {
+        self.raw_port
+    }
 }
 
 impl Drop for CustomPort {
@@ -169,7 +179,10 @@ unsafe extern "C" fn trampoline_get_frame(
         let sample_count = (*frame).size / 2;
         let samples = std::slice::from_raw_parts_mut(buf, sample_count);
         samples.fill(0);
-        let mut audio_frame = AudioFrame { samples, timestamp: (*frame).timestamp.u64_ };
+        let mut audio_frame = AudioFrame {
+            samples,
+            timestamp: (*frame).timestamp.u64_,
+        };
         match port_impl.get_frame(&mut audio_frame) {
             Ok(()) => 0,
             Err(_) => -1,
@@ -195,7 +208,10 @@ unsafe extern "C" fn trampoline_put_frame(
         }
         let sample_count = size_bytes / 2;
         let samples = std::slice::from_raw_parts_mut(buf, sample_count);
-        let audio_frame = AudioFrame { samples, timestamp: (*frame).timestamp.u64_ };
+        let audio_frame = AudioFrame {
+            samples,
+            timestamp: (*frame).timestamp.u64_,
+        };
         match port_impl.put_frame(&audio_frame) {
             Ok(()) => 0,
             Err(_) => -1,
@@ -220,7 +236,10 @@ mod tests {
     #[test]
     fn audio_frame_debug() {
         let mut buf = [0i16; 4];
-        let frame = AudioFrame { samples: &mut buf, timestamp: 12345 };
+        let frame = AudioFrame {
+            samples: &mut buf,
+            timestamp: 12345,
+        };
         let debug = format!("{:?}", frame);
         assert!(debug.contains("AudioFrame"));
         assert!(debug.contains("4")); // sample count
@@ -236,7 +255,10 @@ mod tests {
     #[test]
     fn audio_frame_size() {
         let mut buf = [0i16; 160];
-        let frame = AudioFrame { samples: &mut buf, timestamp: 0 };
+        let frame = AudioFrame {
+            samples: &mut buf,
+            timestamp: 0,
+        };
         assert_eq!(frame.samples.len(), 160);
     }
 
@@ -244,7 +266,10 @@ mod tests {
     fn silence_port_default_impls() {
         let mut port = SilencePort;
         let mut buf = [0i16; 160];
-        let mut frame = AudioFrame { samples: &mut buf, timestamp: 0 };
+        let mut frame = AudioFrame {
+            samples: &mut buf,
+            timestamp: 0,
+        };
         assert!(port.get_frame(&mut frame).is_ok());
         assert!(port.put_frame(&frame).is_ok());
         port.on_destroy();

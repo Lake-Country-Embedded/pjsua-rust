@@ -22,7 +22,9 @@ fn test_conf_enum_ports() {
 #[test]
 fn test_conf_get_port_info() {
     let (app, _rx) = init_app();
-    let info = app.conf_get_port_info(ConfPort::MASTER).expect("Failed to get port info");
+    let info = app
+        .conf_get_port_info(ConfPort::MASTER)
+        .expect("Failed to get port info");
     assert_eq!(info.port, ConfPort::MASTER);
     assert!(info.clock_rate > 0);
     assert!(info.channel_count > 0);
@@ -32,22 +34,39 @@ fn test_conf_get_port_info() {
 #[test]
 fn test_tone_generator_lifecycle() {
     let (app, _rx) = init_app();
-    let mut tonegen = ToneGenerator::new(&app, 8000, 1, 160).expect("Failed to create tone generator");
+    let mut tonegen =
+        ToneGenerator::new(&app, 8000, 1, 160).expect("Failed to create tone generator");
     assert!(!tonegen.is_busy());
 
-    let port = tonegen.add_to_conference(&app).expect("Failed to add tonegen to conference");
+    let port = tonegen
+        .add_to_conference(&app)
+        .expect("Failed to add tonegen to conference");
     assert!(port.0 > 0);
 
-    tonegen.play_digits(&[
-        DtmfDigit { digit: '1', on_ms: 100, off_ms: 50, volume: 0 },
-        DtmfDigit { digit: '2', on_ms: 100, off_ms: 50, volume: 0 },
-    ]).expect("Failed to play digits");
+    tonegen
+        .play_digits(&[
+            DtmfDigit {
+                digit: '1',
+                on_ms: 100,
+                off_ms: 50,
+                volume: 0,
+            },
+            DtmfDigit {
+                digit: '2',
+                on_ms: 100,
+                off_ms: 50,
+                volume: 0,
+            },
+        ])
+        .expect("Failed to play digits");
 
     assert!(tonegen.is_busy());
     tonegen.stop().expect("Failed to stop");
     assert!(!tonegen.is_busy());
 
-    tonegen.remove_from_conference(&app).expect("Failed to remove tonegen");
+    tonegen
+        .remove_from_conference(&app)
+        .expect("Failed to remove tonegen");
     drop(tonegen);
     drop(app);
 }
@@ -55,12 +74,21 @@ fn test_tone_generator_lifecycle() {
 #[test]
 fn test_tone_generator_custom_tones() {
     let (app, _rx) = init_app();
-    let mut tonegen = ToneGenerator::new(&app, 8000, 1, 160).expect("Failed to create tone generator");
-    tonegen.add_to_conference(&app).expect("Failed to add to conf");
+    let mut tonegen =
+        ToneGenerator::new(&app, 8000, 1, 160).expect("Failed to create tone generator");
+    tonegen
+        .add_to_conference(&app)
+        .expect("Failed to add to conf");
 
-    tonegen.play_tones(&[ToneDesc {
-        freq1: 350, freq2: 440, on_ms: 500, off_ms: 0, volume: 0,
-    }]).expect("Failed to play tone");
+    tonegen
+        .play_tones(&[ToneDesc {
+            freq1: 350,
+            freq2: 440,
+            on_ms: 500,
+            off_ms: 0,
+            volume: 0,
+        }])
+        .expect("Failed to play tone");
 
     assert!(tonegen.is_busy());
     drop(tonegen);
@@ -77,13 +105,17 @@ fn test_custom_port_lifecycle() {
     let mut port = CustomPort::new(&app, "test-silence", 8000, 1, 160, Box::new(SilencePort))
         .expect("Failed to create custom port");
 
-    let conf = port.add_to_conference(&app).expect("Failed to add to conference");
+    let conf = port
+        .add_to_conference(&app)
+        .expect("Failed to add to conference");
     assert!(conf.0 > 0);
 
     let ports = app.conf_enum_ports().expect("Failed to enumerate");
     assert!(ports.contains(&conf));
 
-    let info = app.conf_get_port_info(conf).expect("Failed to get port info");
+    let info = app
+        .conf_get_port_info(conf)
+        .expect("Failed to get port info");
     assert_eq!(info.clock_rate, 8000);
     assert_eq!(info.channel_count, 1);
 
@@ -95,7 +127,8 @@ fn test_custom_port_lifecycle() {
 #[test]
 fn test_set_no_sound_device() {
     let (app, _rx) = init_app();
-    app.set_no_sound_device().expect("Failed to set no sound device");
+    app.set_no_sound_device()
+        .expect("Failed to set no sound device");
     drop(app);
 }
 
@@ -123,9 +156,18 @@ fn test_custom_port_bidirectional() {
     let gets = Arc::new(Mutex::new(0u32));
     let puts = Arc::new(Mutex::new(0u32));
 
-    let mut port = CustomPort::new(&app, "test-counter", 8000, 1, 160,
-        Box::new(CountPort { gets: gets.clone(), puts: puts.clone() }),
-    ).expect("Failed to create port");
+    let mut port = CustomPort::new(
+        &app,
+        "test-counter",
+        8000,
+        1,
+        160,
+        Box::new(CountPort {
+            gets: gets.clone(),
+            puts: puts.clone(),
+        }),
+    )
+    .expect("Failed to create port");
 
     let conf = port.add_to_conference(&app).expect("Failed to add");
     app.conf_connect(conf, ConfPort::MASTER).ok();

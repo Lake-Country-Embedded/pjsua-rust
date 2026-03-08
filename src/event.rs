@@ -48,10 +48,7 @@ pub enum SipEvent {
         conf_port: Option<ConfPort>,
     },
     /// A DTMF digit was received on a call.
-    DtmfDigit {
-        call_id: CallId,
-        digit: char,
-    },
+    DtmfDigit { call_id: CallId, digit: char },
     /// Transfer (REFER) status update.
     TransferStatus {
         call_id: CallId,

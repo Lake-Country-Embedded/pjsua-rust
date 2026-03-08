@@ -130,13 +130,26 @@ fn test_tonegen_lifecycle_leak() {
         let mut tonegen = ToneGenerator::new(&app, 8000, 1, 160)
             .unwrap_or_else(|e| panic!("Tonegen create failed on iteration {i}: {e}"));
 
-        tonegen.add_to_conference(&app)
+        tonegen
+            .add_to_conference(&app)
             .unwrap_or_else(|e| panic!("Tonegen conf add failed on iteration {i}: {e}"));
 
-        tonegen.play_digits(&[
-            DtmfDigit { digit: '1', on_ms: 50, off_ms: 25, volume: 0 },
-            DtmfDigit { digit: '2', on_ms: 50, off_ms: 25, volume: 0 },
-        ]).ok();
+        tonegen
+            .play_digits(&[
+                DtmfDigit {
+                    digit: '1',
+                    on_ms: 50,
+                    off_ms: 25,
+                    volume: 0,
+                },
+                DtmfDigit {
+                    digit: '2',
+                    on_ms: 50,
+                    off_ms: 25,
+                    volume: 0,
+                },
+            ])
+            .ok();
 
         tonegen.stop().ok();
         drop(tonegen);

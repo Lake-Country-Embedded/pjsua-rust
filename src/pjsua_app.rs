@@ -193,9 +193,8 @@ impl PjsuaApp {
         }
 
         let mut tp_id: ffi::pjsua_transport_id = -1;
-        let status = unsafe {
-            ffi::pjsua_transport_create(transport_type.to_pjsip(), &tp_cfg, &mut tp_id)
-        };
+        let status =
+            unsafe { ffi::pjsua_transport_create(transport_type.to_pjsip(), &tp_cfg, &mut tp_id) };
         check_status(status)?;
         debug!("transport created: id={tp_id}");
         Ok(TransportId(tp_id))
@@ -206,8 +205,7 @@ impl PjsuaApp {
     /// If `force` is false, the transport will be closed gracefully (waiting
     /// for pending transactions). If `force` is true, it is closed immediately.
     pub fn close_transport(&self, id: TransportId, force: bool) -> Result<()> {
-        let status =
-            unsafe { ffi::pjsua_transport_close(id.0, if force { 1 } else { 0 }) };
+        let status = unsafe { ffi::pjsua_transport_close(id.0, if force { 1 } else { 0 }) };
         check_status(status)?;
         debug!("transport closed: id={} force={force}", id.0);
         Ok(())
@@ -219,7 +217,9 @@ impl PjsuaApp {
 
     /// Register a SIP account and return its ID.
     pub fn add_account(&self, config: &AccountConfig) -> Result<AccountId> {
-        let (acc_cfg, _strings) = build_acc_cfg(config);
+        let mut acc_cfg: ffi::pjsua_acc_config = Default::default();
+        unsafe { ffi::pjsua_acc_config_default(&mut acc_cfg) };
+        let _strings = populate_acc_cfg(&mut acc_cfg, config);
 
         let mut acc_id: ffi::pjsua_acc_id = -1;
         let status = unsafe { ffi::pjsua_acc_add(&acc_cfg, 0, &mut acc_id) };
@@ -230,7 +230,9 @@ impl PjsuaApp {
 
     /// Modify an existing SIP account's configuration.
     pub fn modify_account(&self, id: AccountId, config: &AccountConfig) -> Result<()> {
-        let (acc_cfg, _strings) = build_acc_cfg(config);
+        let mut acc_cfg: ffi::pjsua_acc_config = Default::default();
+        unsafe { ffi::pjsua_acc_config_default(&mut acc_cfg) };
+        let _strings = populate_acc_cfg(&mut acc_cfg, config);
 
         let status = unsafe { ffi::pjsua_acc_modify(id.0, &acc_cfg) };
         check_status(status)?;
@@ -291,17 +293,13 @@ impl PjsuaApp {
 
     /// Answer an incoming call with the given SIP status code (e.g. 200).
     pub fn answer_call(&self, call: CallId, code: u32) -> Result<()> {
-        let status = unsafe {
-            ffi::pjsua_call_answer(call.0, code, ptr::null(), ptr::null())
-        };
+        let status = unsafe { ffi::pjsua_call_answer(call.0, code, ptr::null(), ptr::null()) };
         check_status(status)
     }
 
     /// Hang up a call with the given SIP status code (e.g. 603 = Decline).
     pub fn hangup_call(&self, call: CallId, code: u32) -> Result<()> {
-        let status = unsafe {
-            ffi::pjsua_call_hangup(call.0, code, ptr::null(), ptr::null())
-        };
+        let status = unsafe { ffi::pjsua_call_hangup(call.0, code, ptr::null(), ptr::null()) };
         check_status(status)
     }
 
@@ -313,9 +311,7 @@ impl PjsuaApp {
 
     /// Take a call off hold (re-INVITE with unhold).
     pub fn unhold_call(&self, call: CallId) -> Result<()> {
-        let status = unsafe {
-            ffi::pjsua_call_reinvite(call.0, PJSUA_CALL_UNHOLD, ptr::null())
-        };
+        let status = unsafe { ffi::pjsua_call_reinvite(call.0, PJSUA_CALL_UNHOLD, ptr::null()) };
         check_status(status)
     }
 
@@ -406,8 +402,7 @@ impl PjsuaApp {
     pub fn conf_get_signal_level(&self, port: ConfPort) -> Result<(u32, u32)> {
         let mut tx: u32 = 0;
         let mut rx: u32 = 0;
-        let status =
-            unsafe { ffi::pjsua_conf_get_signal_level(port.0, &mut tx, &mut rx) };
+        let status = unsafe { ffi::pjsua_conf_get_signal_level(port.0, &mut tx, &mut rx) };
         check_status(status)?;
         Ok((tx, rx))
     }
@@ -430,9 +425,7 @@ impl PjsuaApp {
         &self,
         port: *mut ffi::pjmedia_port,
     ) -> Result<(ConfPort, *mut ffi::pj_pool_t)> {
-        let pool = unsafe {
-            ffi::pjsua_pool_create(c"conf-port".as_ptr(), 512, 512)
-        };
+        let pool = unsafe { ffi::pjsua_pool_create(c"conf-port".as_ptr(), 512, 512) };
         if pool.is_null() {
             return Err(PjError::Pjsip {
                 status: -1,
@@ -486,7 +479,10 @@ impl PjsuaApp {
         let mut count = ids.len() as u32;
         let status = unsafe { ffi::pjsua_enum_conf_ports(ids.as_mut_ptr(), &mut count) };
         check_status(status)?;
-        Ok(ids[..count as usize].iter().map(|&id| ConfPort(id)).collect())
+        Ok(ids[..count as usize]
+            .iter()
+            .map(|&id| ConfPort(id))
+            .collect())
     }
 
     // ------------------------------------------------------------------
@@ -531,8 +527,7 @@ impl PjsuaApp {
         // PJMEDIA_FILE_NO_LOOP = 0x01
         let options: u32 = if no_loop { 0x01 } else { 0 };
         let mut player_id: ffi::pjsua_player_id = -1;
-        let status =
-            unsafe { ffi::pjsua_player_create(&pj_filename, options, &mut player_id) };
+        let status = unsafe { ffi::pjsua_player_create(&pj_filename, options, &mut player_id) };
         check_status(status)?;
         debug!("player created: id={player_id} path={path}");
         Ok(PlayerId(player_id))
@@ -668,10 +663,16 @@ impl PjsuaApp {
 /// from the config into an internal pool, so the returned `PjString` values
 /// only need to survive through the FFI call itself. After the call returns,
 /// PJSUA holds its own copies and does not reference the original pointers.
-fn build_acc_cfg(config: &AccountConfig) -> (ffi::pjsua_acc_config, Vec<PjString>) {
-    let mut acc_cfg: ffi::pjsua_acc_config = Default::default();
-    unsafe { ffi::pjsua_acc_config_default(&mut acc_cfg) };
-
+/// Populate a `pjsua_acc_config` in place from an `AccountConfig`.
+///
+/// The caller must allocate the `acc_cfg` on the stack and call
+/// `pjsua_acc_config_default` before this function. This avoids moving the
+/// struct after initialisation, which would invalidate self-referential
+/// pointers in embedded linked-list headers (`reg_hdr_list`, `sub_hdr_list`).
+///
+/// Returns a `Vec<PjString>` that must be kept alive for the duration of any
+/// FFI call that uses the config.
+fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig) -> Vec<PjString> {
     let mut strings = Vec::new();
 
     let uri_str = PjString::new(&config.sip_uri());
@@ -717,7 +718,7 @@ fn build_acc_cfg(config: &AccountConfig) -> (ffi::pjsua_acc_config, Vec<PjString
         strings.push(proxy_str);
     }
 
-    (acc_cfg, strings)
+    strings
 }
 
 impl Drop for PjsuaApp {
