@@ -159,6 +159,11 @@ fn main() {
         .allowlist_function("pj_strerror")
         .allowlist_function("pj_str")
         .allowlist_function("pj_cstr")
+        // Thread registration (needed for calling pjlib from non-PJSIP threads)
+        .allowlist_function("pj_thread_register")
+        .allowlist_function("pj_thread_is_registered")
+        .allowlist_type("pj_thread_t")
+        .allowlist_type("pj_thread_desc")
         // Types
         .allowlist_type("pjsua_config")
         .allowlist_type("pjsua_logging_config")

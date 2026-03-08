@@ -16,6 +16,6 @@ pub use error::{check_status, PjError, Result};
 pub use event::SipEvent;
 pub use ffi_helpers::{pj_str_to_string, PjString};
 pub use media_port::{AudioFrame, CustomPort, MediaPort};
-pub use pjsua_app::PjsuaApp;
+pub use pjsua_app::{register_thread, PjsuaApp};
 pub use tonegen::{DtmfDigit, ToneDesc, ToneGenerator};
 pub use types::*;

@@ -721,6 +721,48 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
     strings
 }
 
+// ---------------------------------------------------------------------------
+// Thread registration (process-level, not per-PjsuaApp)
+// ---------------------------------------------------------------------------
+
+/// Register the calling thread with PJLIB.
+///
+/// PJLIB requires every thread that calls pjlib/pjsua functions to be
+/// registered. The main thread is registered automatically during
+/// `PjsuaApp::new()`, but any additional threads (e.g. tokio tasks
+/// scheduled on a different OS thread) must call this before using
+/// PJSIP APIs.
+///
+/// It is safe to call this multiple times — if the thread is already
+/// registered, this is a no-op.
+///
+/// # Safety Note
+///
+/// The `pj_thread_desc` storage is leaked intentionally — it must remain
+/// valid for the thread's lifetime, and Rust threads don't have a
+/// convenient destructor hook. The 512-byte allocation is negligible.
+pub fn register_thread(name: &str) -> Result<()> {
+    unsafe {
+        if ffi::pj_thread_is_registered() != 0 {
+            return Ok(());
+        }
+        // Allocate thread descriptor on the heap and leak it — it must
+        // remain valid for the lifetime of the thread.
+        let desc: Box<ffi::pj_thread_desc> = Box::new(std::mem::zeroed());
+        let desc_ptr = Box::into_raw(desc);
+        let mut thread_ptr: *mut ffi::pj_thread_t = ptr::null_mut();
+
+        let name_cstr =
+            std::ffi::CString::new(name).unwrap_or_else(|_| std::ffi::CString::new("rust").unwrap());
+        let status = ffi::pj_thread_register(
+            name_cstr.as_ptr(),
+            (*desc_ptr).as_mut_ptr(),
+            &mut thread_ptr,
+        );
+        check_status(status)
+    }
+}
+
 impl Drop for PjsuaApp {
     fn drop(&mut self) {
         info!("destroying PJSUA");
