@@ -142,7 +142,9 @@ fn main() {
         // Player / Recorder
         .allowlist_function("pjsua_player_create")
         .allowlist_function("pjsua_player_get_conf_port")
+        .allowlist_function("pjsua_player_get_port")
         .allowlist_function("pjsua_player_destroy")
+        .allowlist_function("pjmedia_wav_player_set_eof_cb2")
         .allowlist_function("pjsua_recorder_create")
         .allowlist_function("pjsua_recorder_get_conf_port")
         .allowlist_function("pjsua_recorder_destroy")

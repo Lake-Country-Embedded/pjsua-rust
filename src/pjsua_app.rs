@@ -548,6 +548,54 @@ impl PjsuaApp {
         Ok(ConfPort(port))
     }
 
+    /// Get the underlying media port of a player.
+    ///
+    /// # Safety
+    /// The returned pointer is only valid while the player exists.
+    /// The caller must not destroy the player while holding this pointer.
+    pub fn player_get_port(&self, id: PlayerId) -> Result<*mut ffi::pjmedia_port> {
+        let mut port: *mut ffi::pjmedia_port = std::ptr::null_mut();
+        let status = unsafe { ffi::pjsua_player_get_port(id.0, &mut port) };
+        check_status(status)?;
+        Ok(port)
+    }
+
+    /// Register an EOF callback for a WAV file player.
+    ///
+    /// When the player reaches end-of-file, it sends the `PlayerId` through
+    /// the provided channel. Only one callback per player — subsequent calls
+    /// replace the previous callback.
+    ///
+    /// The callback fires from PJSIP's media thread, so we use
+    /// `std::sync::mpsc` (not tokio) for the channel to avoid needing a
+    /// tokio runtime context in the callback.
+    ///
+    /// # Safety
+    /// The `tx` sender is leaked (boxed) so it lives as long as the player.
+    /// It is cleaned up when the player is destroyed or when a new callback
+    /// replaces it (via PJSIP internally).
+    pub fn register_player_eof_callback(
+        &self,
+        id: PlayerId,
+        tx: std::sync::mpsc::Sender<PlayerId>,
+    ) -> Result<()> {
+        let port = self.player_get_port(id)?;
+
+        // Box the sender + player ID so they survive the callback
+        let user_data = Box::new((tx, id));
+        let user_data_ptr = Box::into_raw(user_data) as *mut std::ffi::c_void;
+
+        unsafe {
+            ffi::pjmedia_wav_player_set_eof_cb2(
+                port,
+                user_data_ptr,
+                Some(player_eof_trampoline),
+            );
+        }
+        debug!("EOF callback registered for player {}", id.0);
+        Ok(())
+    }
+
     /// Create a WAV file recorder.
     pub fn create_recorder(&self, path: &str) -> Result<RecorderId> {
         let filename = PjString::new(path);
@@ -650,6 +698,20 @@ impl PjsuaApp {
         let status = unsafe { ffi::pjsua_codec_set_priority(&pj_codec, priority) };
         check_status(status)
     }
+}
+
+/// C trampoline for WAV player EOF callback.
+///
+/// Called from PJSIP's media thread. Sends the PlayerId through the
+/// std::sync::mpsc channel, then frees the user_data.
+unsafe extern "C" fn player_eof_trampoline(
+    _port: *mut ffi::pjmedia_port,
+    usr_data: *mut std::ffi::c_void,
+) {
+    let data = Box::from_raw(usr_data as *mut (std::sync::mpsc::Sender<PlayerId>, PlayerId));
+    let (tx, player_id) = *data;
+    // Best-effort send — if receiver is dropped, that's fine
+    let _ = tx.send(player_id);
 }
 
 /// Build a `pjsua_acc_config` from an `AccountConfig`.
