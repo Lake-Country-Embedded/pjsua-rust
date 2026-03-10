@@ -355,6 +355,12 @@ pub struct AccountConfig {
     pub registrar: Option<String>,
     /// Outbound proxy URI.
     pub proxy: Option<String>,
+    /// Registration retry interval in seconds.
+    pub reg_retry_interval: Option<u32>,
+    /// RTP port start (set on `rtp_cfg.port`).
+    pub rtp_port_start: Option<u16>,
+    /// RTP port range (set on `rtp_cfg.port_range`).
+    pub rtp_port_range: Option<u16>,
 }
 
 impl Default for AccountConfig {
@@ -375,6 +381,9 @@ impl Default for AccountConfig {
             use_sips: false,
             registrar: None,
             proxy: None,
+            reg_retry_interval: None,
+            rtp_port_start: None,
+            rtp_port_range: None,
         }
     }
 }

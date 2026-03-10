@@ -16,7 +16,7 @@ async fn test_registration() {
     let (app, mut rx) = PjsuaApp::new(pj_cfg).expect("Failed to init PJSUA");
 
     // Create UDP transport
-    app.create_transport(TransportType::Udp, None, 0, None)
+    app.create_transport(TransportType::Udp, None, 0, None, None)
         .expect("Failed to create transport");
 
     // Register the caller account
@@ -52,7 +52,7 @@ async fn test_basic_call() {
 
     let (app, mut rx) = PjsuaApp::new(pj_cfg).expect("Failed to init PJSUA");
 
-    app.create_transport(TransportType::Udp, None, 0, None)
+    app.create_transport(TransportType::Udp, None, 0, None, None)
         .expect("Failed to create transport");
 
     // Register both accounts

@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
 
     // Create UDP transport
     let _transport_id = app
-        .create_transport(TransportType::Udp, None, 0, None)
+        .create_transport(TransportType::Udp, None, 0, None, None)
         .context("Failed to create UDP transport")?;
     info!("UDP transport created");
 

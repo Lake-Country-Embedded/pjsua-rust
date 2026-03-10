@@ -102,6 +102,9 @@ impl TomlAccountConfig {
             use_sips: self.use_sips,
             registrar: self.registrar.clone(),
             proxy: self.proxy.clone(),
+            reg_retry_interval: None,
+            rtp_port_start: None,
+            rtp_port_range: None,
         }
     }
 }

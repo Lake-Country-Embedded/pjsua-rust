@@ -148,10 +148,17 @@ impl PjsuaApp {
         bind_addr: Option<&str>,
         port: u16,
         tls: Option<&TlsConfig>,
+        qos_dscp: Option<u8>,
     ) -> Result<TransportId> {
         let mut tp_cfg: ffi::pjsua_transport_config = Default::default();
         unsafe { ffi::pjsua_transport_config_default(&mut tp_cfg) };
         tp_cfg.port = port as u32;
+
+        // Apply QoS DSCP if provided
+        if let Some(dscp) = qos_dscp {
+            tp_cfg.qos_params.flags = 1; // PJ_QOS_PARAM_HAS_DSCP
+            tp_cfg.qos_params.dscp_val = dscp;
+        }
 
         // Keep all PjStrings alive for the duration of the FFI call.
         let mut strings: Vec<PjString> = Vec::new();
@@ -778,6 +785,19 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
         acc_cfg.proxy_cnt = 1;
         acc_cfg.proxy[0] = proxy_str.as_pj_str();
         strings.push(proxy_str);
+    }
+
+    // Registration retry interval
+    if let Some(interval) = config.reg_retry_interval {
+        acc_cfg.reg_retry_interval = interval;
+    }
+
+    // RTP port range (for media transport)
+    if let Some(start) = config.rtp_port_start {
+        acc_cfg.rtp_cfg.port = start as u32;
+        if let Some(range) = config.rtp_port_range {
+            acc_cfg.rtp_cfg.port_range = range as u32;
+        }
     }
 
     strings

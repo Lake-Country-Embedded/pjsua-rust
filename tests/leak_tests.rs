@@ -30,7 +30,7 @@ fn test_repeated_init_destroy() {
             .unwrap_or_else(|e| panic!("Init failed on iteration {i}: {e}"));
 
         // Create a transport to exercise more allocation paths
-        app.create_transport(TransportType::Udp, None, 0, None)
+        app.create_transport(TransportType::Udp, None, 0, None, None)
             .unwrap_or_else(|e| panic!("Transport failed on iteration {i}: {e}"));
 
         drop(app);
@@ -45,7 +45,7 @@ fn test_repeated_init_destroy() {
 fn test_account_add_cycle() {
     let (app, _rx) = PjsuaApp::new(default_config()).expect("Failed to init PJSUA");
 
-    app.create_transport(TransportType::Udp, None, 0, None)
+    app.create_transport(TransportType::Udp, None, 0, None, None)
         .expect("Failed to create transport");
 
     // PJSUA has a limited number of account slots (typically 8-32).
@@ -68,6 +68,9 @@ fn test_account_add_cycle() {
             use_sips: false,
             registrar: None,
             proxy: None,
+            reg_retry_interval: None,
+            rtp_port_start: None,
+            rtp_port_range: None,
         };
 
         let acc_id = app
@@ -92,11 +95,11 @@ fn test_transport_lifecycle() {
 
         // Create UDP and TCP transports
         let _udp = app
-            .create_transport(TransportType::Udp, None, 0, None)
+            .create_transport(TransportType::Udp, None, 0, None, None)
             .unwrap_or_else(|e| panic!("UDP transport failed on iteration {i}: {e}"));
 
         let _tcp = app
-            .create_transport(TransportType::Tcp, None, 0, None)
+            .create_transport(TransportType::Tcp, None, 0, None, None)
             .unwrap_or_else(|e| panic!("TCP transport failed on iteration {i}: {e}"));
 
         drop(app);
