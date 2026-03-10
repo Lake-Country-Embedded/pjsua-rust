@@ -774,6 +774,13 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
     // SRTP
     acc_cfg.use_srtp = config.srtp.to_pjsip();
 
+    // Disable NAT contact/via rewriting — keep the local IP in Contact and Via
+    // headers and let the registrar use rport/received to track the NAT mapping.
+    // Without this, PJSIP rewrites headers with the STUN-resolved public IP after
+    // the first registration response, which breaks incoming calls on many PBXes.
+    acc_cfg.allow_contact_rewrite = 0;
+    acc_cfg.allow_via_rewrite = 0;
+
     // Registration timeout
     if let Some(timeout) = config.reg_timeout {
         acc_cfg.reg_timeout = timeout;
