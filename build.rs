@@ -21,8 +21,8 @@ fn main() {
         parts.first().copied().unwrap_or(0),
         parts.get(1).copied().unwrap_or(0),
     );
-    if major > 2 || (major == 2 && minor > 15) {
-        println!("cargo:warning=PJSIP version {version} is newer than tested (2.15). Proceed with caution.");
+    if major > 2 || (major == 2 && minor > 16) {
+        println!("cargo:warning=PJSIP version {version} is newer than tested (2.16). Proceed with caution.");
     }
 
     // pkg-config with statik(true) already emits the correct cargo:rustc-link-lib=static=...

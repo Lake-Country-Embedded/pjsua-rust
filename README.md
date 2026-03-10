@@ -20,7 +20,7 @@ pjsua-rust wraps the PJSUA level-1 C API in safe Rust types with RAII lifecycle 
 
 ## Prerequisites
 
-- **PJSIP 2.13+** installed with development headers (tested up to 2.15-dev)
+- **PJSIP 2.16** installed with development headers
 - **pkg-config** — the build system uses `pkg-config` to locate `libpjproject`
 - **Rust 1.70+** with the stable toolchain
 - **libclang** — required by `bindgen` for generating FFI bindings
@@ -257,10 +257,8 @@ pjsua-rust/
 
 | Version | Status |
 |---------|--------|
-| 2.13.x | Minimum supported |
-| 2.14.x | Supported |
-| 2.15.x | Tested (development target) |
-| > 2.15 | May work (build emits a warning) |
+| 2.16.x | Actively tested and confirmed |
+| 2.13–2.15 | Minimum build requirement met, not actively tested |
 
 The build script checks the PJSIP version via pkg-config and will error if it is below 2.13.
 
