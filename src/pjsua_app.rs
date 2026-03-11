@@ -7,7 +7,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::error::{check_status, make_pj_error, PjError, Result};
 use crate::event::{self, SipEvent};
@@ -249,9 +249,14 @@ impl PjsuaApp {
 
     /// Unregister and delete a SIP account.
     pub fn remove_account(&self, id: AccountId) -> Result<()> {
-        // Unregister first (renew = PJ_FALSE = 0).
+        // Best-effort unregister (fails for P2P accounts or mid-transaction).
         let status = unsafe { ffi::pjsua_acc_set_registration(id.0, 0) };
-        check_status(status)?;
+        if status != 0 {
+            warn!(
+                "could not unregister account {} (status={}), proceeding with removal",
+                id.0, status
+            );
+        }
         let status = unsafe { ffi::pjsua_acc_del(id.0) };
         check_status(status)?;
         info!("account removed: id={}", id.0);
