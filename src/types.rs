@@ -389,29 +389,46 @@ impl Default for AccountConfig {
 }
 
 impl AccountConfig {
+    /// SIP URI transport parameter suffix for non-UDP transports.
+    ///
+    /// PJSIP needs `;transport=tcp` or `;transport=tls` on SIP URIs to route
+    /// signalling through the correct transport. UDP is the default and needs
+    /// no parameter. The `sips:` scheme already implies TLS, so the parameter
+    /// is only added for plain `sip:` URIs with TLS transport.
+    fn transport_param(&self) -> &'static str {
+        match self.transport {
+            TransportType::Tcp => ";transport=tcp",
+            TransportType::Tls if !self.use_sips => ";transport=tls",
+            _ => "",
+        }
+    }
+
     /// Build the SIP URI for this account.
     ///
-    /// Honors `display_name` and `use_sips`.
+    /// Honors `display_name`, `use_sips`, and `transport`.
     pub fn sip_uri(&self) -> String {
         let scheme = if self.use_sips { "sips" } else { "sip" };
+        let tp = self.transport_param();
         match &self.display_name {
             Some(name) => format!(
-                "\"{}\" <{}:{}@{}>",
-                name, scheme, self.username, self.server
+                "\"{}\" <{}:{}@{}{}>",
+                name, scheme, self.username, self.server, tp
             ),
-            None => format!("{}:{}@{}", scheme, self.username, self.server),
+            None => format!("{}:{}@{}{}", scheme, self.username, self.server, tp),
         }
     }
 
     /// Build the registrar URI.
     ///
     /// Returns the custom `registrar` if set, otherwise `sip:server:port`.
+    /// Appends `;transport=tcp` or `;transport=tls` for non-UDP transports.
     pub fn registrar_uri(&self) -> String {
         if let Some(ref reg) = self.registrar {
             return reg.clone();
         }
         let scheme = if self.use_sips { "sips" } else { "sip" };
-        format!("{}:{}:{}", scheme, self.server, self.port)
+        let tp = self.transport_param();
+        format!("{}:{}:{}{}", scheme, self.server, self.port, tp)
     }
 }
 
@@ -545,21 +562,9 @@ mod tests {
     #[test]
     fn account_config_sip_uri() {
         let cfg = AccountConfig {
-            name: "test".into(),
             username: "6013".into(),
-            password: "secret".into(),
             server: "192.168.10.10".into(),
-            port: 5060,
-            transport: TransportType::Udp,
-            srtp: SrtpMode::Disabled,
-            access_code: None,
-            display_name: None,
-            auth_username: None,
-            realm: None,
-            reg_timeout: None,
-            use_sips: false,
-            registrar: None,
-            proxy: None,
+            ..Default::default()
         };
         assert_eq!(cfg.sip_uri(), "sip:6013@192.168.10.10");
         assert_eq!(cfg.registrar_uri(), "sip:192.168.10.10:5060");
@@ -568,21 +573,10 @@ mod tests {
     #[test]
     fn account_config_sip_uri_with_display_name() {
         let cfg = AccountConfig {
-            name: "test".into(),
             username: "6013".into(),
-            password: "secret".into(),
             server: "192.168.10.10".into(),
-            port: 5060,
-            transport: TransportType::Udp,
-            srtp: SrtpMode::Disabled,
-            access_code: None,
             display_name: Some("Alice".into()),
-            auth_username: None,
-            realm: None,
-            reg_timeout: None,
-            use_sips: false,
-            registrar: None,
-            proxy: None,
+            ..Default::default()
         };
         assert_eq!(cfg.sip_uri(), "\"Alice\" <sip:6013@192.168.10.10>");
     }
@@ -590,44 +584,58 @@ mod tests {
     #[test]
     fn account_config_use_sips() {
         let cfg = AccountConfig {
-            name: "test".into(),
             username: "6013".into(),
-            password: "secret".into(),
             server: "192.168.10.10".into(),
             port: 5061,
             transport: TransportType::Tls,
-            srtp: SrtpMode::Disabled,
-            access_code: None,
-            display_name: None,
-            auth_username: None,
-            realm: None,
-            reg_timeout: None,
             use_sips: true,
-            registrar: None,
-            proxy: None,
+            ..Default::default()
         };
+        // sips: scheme implies TLS — no ;transport= needed
         assert_eq!(cfg.sip_uri(), "sips:6013@192.168.10.10");
         assert_eq!(cfg.registrar_uri(), "sips:192.168.10.10:5061");
     }
 
     #[test]
+    fn account_config_tls_without_sips() {
+        let cfg = AccountConfig {
+            username: "user".into(),
+            server: "sip.linphone.org".into(),
+            port: 5061,
+            transport: TransportType::Tls,
+            use_sips: false,
+            ..Default::default()
+        };
+        // TLS transport without sips: scheme needs ;transport=tls
+        assert_eq!(cfg.sip_uri(), "sip:user@sip.linphone.org;transport=tls");
+        assert_eq!(
+            cfg.registrar_uri(),
+            "sip:sip.linphone.org:5061;transport=tls"
+        );
+    }
+
+    #[test]
+    fn account_config_tcp_transport() {
+        let cfg = AccountConfig {
+            username: "user".into(),
+            server: "pbx.example.com".into(),
+            transport: TransportType::Tcp,
+            ..Default::default()
+        };
+        assert_eq!(cfg.sip_uri(), "sip:user@pbx.example.com;transport=tcp");
+        assert_eq!(
+            cfg.registrar_uri(),
+            "sip:pbx.example.com:5060;transport=tcp"
+        );
+    }
+
+    #[test]
     fn account_config_custom_registrar() {
         let cfg = AccountConfig {
-            name: "test".into(),
             username: "6013".into(),
-            password: "secret".into(),
             server: "192.168.10.10".into(),
-            port: 5060,
-            transport: TransportType::Udp,
-            srtp: SrtpMode::Disabled,
-            access_code: None,
-            display_name: None,
-            auth_username: None,
-            realm: None,
-            reg_timeout: None,
-            use_sips: false,
             registrar: Some("sip:registrar.example.com".into()),
-            proxy: None,
+            ..Default::default()
         };
         assert_eq!(cfg.registrar_uri(), "sip:registrar.example.com");
     }
@@ -684,21 +692,8 @@ mod tests {
     #[test]
     fn account_config_with_access_code() {
         let cfg = AccountConfig {
-            name: "receiver".into(),
-            username: "6014".into(),
-            password: "secret".into(),
-            server: "192.168.10.10".into(),
-            port: 5060,
-            transport: TransportType::Udp,
-            srtp: SrtpMode::Disabled,
             access_code: Some("1234".into()),
-            display_name: None,
-            auth_username: None,
-            realm: None,
-            reg_timeout: None,
-            use_sips: false,
-            registrar: None,
-            proxy: None,
+            ..Default::default()
         };
         assert_eq!(cfg.access_code.as_deref(), Some("1234"));
     }
