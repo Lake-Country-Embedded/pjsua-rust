@@ -218,6 +218,23 @@ impl PjsuaApp {
         Ok(())
     }
 
+    /// Update a transport's published address (addr_name) in-place.
+    ///
+    /// After a network change, the UDP transport's socket (bound to 0.0.0.0)
+    /// still works, but PJSIP's cached published address is stale.  This
+    /// updates the cached address so Contact/Via headers use the new IP.
+    /// No socket operations are performed.
+    pub fn set_transport_published_address(&self, id: TransportId, addr: &str) -> Result<()> {
+        let c_addr = std::ffi::CString::new(addr)
+            .map_err(|_| crate::error::PjError::InvalidArg("invalid address string".into()))?;
+        let status = unsafe {
+            ffi::pjsua_transport_set_published_address(id.0, c_addr.as_ptr())
+        };
+        check_status(status)?;
+        info!("transport {} published address set to {addr}", id.0);
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Account management
     // ------------------------------------------------------------------
@@ -244,6 +261,19 @@ impl PjsuaApp {
         let status = unsafe { ffi::pjsua_acc_modify(id.0, &acc_cfg) };
         check_status(status)?;
         info!("account modified: id={} name={}", id.0, config.name);
+        Ok(())
+    }
+
+    /// Enable or disable SIP registration for an account.
+    ///
+    /// Pass `true` to trigger (re-)registration, `false` to unregister and
+    /// stop automatic re-registration. Used during transport rebind to pause
+    /// REGISTER traffic while transports are being swapped.
+    pub fn set_registration(&self, id: AccountId, register: bool) -> Result<()> {
+        let renew: ffi::pj_bool_t = if register { 1 } else { 0 };
+        let status = unsafe { ffi::pjsua_acc_set_registration(id.0, renew) };
+        check_status(status)?;
+        debug!("account {} registration set to {register}", id.0);
         Ok(())
     }
 

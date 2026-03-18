@@ -90,6 +90,7 @@ fn main() {
         .allowlist_function("pjsua_transport_get_info")
         .allowlist_function("pjsua_transport_close")
         .allowlist_function("pjsua_transport_config_default")
+        .allowlist_function("pjsua_transport_set_published_address")
         // Account
         .allowlist_function("pjsua_acc_config_default")
         .allowlist_function("pjsua_acc_add")
@@ -205,4 +206,18 @@ fn main() {
     bindings
         .write_to_file(out_path.join("pjsip_bindings.rs"))
         .expect("Failed to write bindings");
+
+    // Compile the C transport helper
+    let mut cc_build = cc::Build::new();
+    cc_build.file("src/transport_helper.c");
+    for path in &lib.include_paths {
+        cc_build.include(path);
+    }
+    for (key, val) in &lib.defines {
+        match val {
+            Some(v) => { cc_build.define(key, v.as_str()); }
+            None => { cc_build.define(key, None); }
+        }
+    }
+    cc_build.compile("transport_helper");
 }
