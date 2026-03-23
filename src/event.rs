@@ -67,13 +67,13 @@ static EVENT_TX: Mutex<Option<mpsc::UnboundedSender<SipEvent>>> = Mutex::new(Non
 /// Store the sender half of the event channel. Called during
 /// [`PjsuaApp::new`](crate::PjsuaApp::new).
 pub(crate) fn set_event_sender(tx: mpsc::UnboundedSender<SipEvent>) {
-    let mut guard = EVENT_TX.lock().unwrap();
+    let mut guard = EVENT_TX.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(tx);
 }
 
 /// Clear the event sender. Called during [`PjsuaApp::drop`].
 pub(crate) fn clear_event_sender() {
-    let mut guard = EVENT_TX.lock().unwrap();
+    let mut guard = EVENT_TX.lock().unwrap_or_else(|e| e.into_inner());
     *guard = None;
 }
 
