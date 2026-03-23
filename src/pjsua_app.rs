@@ -5,9 +5,16 @@
 
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::os::raw::c_uint;
 
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+
+// pjsip_tsx_set_timers is in pjsip/sip_transaction.h but not picked up
+// by bindgen from the pjsua.h wrapper. Declare it manually.
+extern "C" {
+    fn pjsip_tsx_set_timers(t1: c_uint, t2: c_uint, t4: c_uint, td: c_uint);
+}
 
 use crate::error::{check_status, make_pj_error, PjError, Result};
 use crate::event::{self, SipEvent};
@@ -133,6 +140,28 @@ impl PjsuaApp {
         info!("PJSUA started");
 
         Ok((PjsuaApp { _private: () }, rx))
+    }
+
+    // ------------------------------------------------------------------
+    // SIP Timers
+    // ------------------------------------------------------------------
+
+    /// Set the SIP transaction timeout in seconds.
+    ///
+    /// Adjusts both the T1 retransmission timer and the TD/timeout timer
+    /// used for REGISTER and other non-INVITE transactions. Lower values
+    /// speed up detection of unreachable servers (e.g., for failover).
+    /// RFC 3261 default is 32 seconds (T1=500ms, Timer F = T1*64).
+    pub fn set_transaction_timeout(&self, timeout_secs: u32) {
+        let t1_ms = (timeout_secs as u64 * 1000 / 64) as u32;
+        let td_ms = timeout_secs * 1000;
+        info!(
+            "Setting SIP transaction timeout: {}s (T1={}ms, TD={}ms)",
+            timeout_secs, t1_ms, td_ms
+        );
+        // Must set both t1 AND td — PJSIP's timeout_timer_val is only
+        // updated when td is explicitly provided (not derived from t1).
+        unsafe { pjsip_tsx_set_timers(t1_ms, 0, 0, td_ms) };
     }
 
     // ------------------------------------------------------------------
@@ -853,9 +882,15 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
     // Both must be set — PJSIP uses reg_first_retry_interval for transport
     // failures and defaults it to 0 (no retry), which causes the device to
     // stay unregistered when the server is temporarily down.
+    //
+    // reg_retry_random_interval defaults to 10 in PJSIP, which is subtracted
+    // from the retry interval. With interval=10 and random=10, the effective
+    // retry can become 0 (no retry). Cap the random interval to 25% of the
+    // retry interval to prevent this.
     if let Some(interval) = config.reg_retry_interval {
         acc_cfg.reg_retry_interval = interval;
         acc_cfg.reg_first_retry_interval = interval;
+        acc_cfg.reg_retry_random_interval = interval / 4;
     }
 
     // RTP port range (for media transport)
