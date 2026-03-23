@@ -105,6 +105,7 @@ impl TomlAccountConfig {
             reg_retry_interval: None,
             rtp_port_start: None,
             rtp_port_range: None,
+            transport_id: None,
         }
     }
 }

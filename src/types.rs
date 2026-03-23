@@ -361,6 +361,14 @@ pub struct AccountConfig {
     pub rtp_port_start: Option<u16>,
     /// RTP port range (set on `rtp_cfg.port_range`).
     pub rtp_port_range: Option<u16>,
+    /// Pin this account to a specific PJSUA transport ID.
+    ///
+    /// When `Some`, the value is written directly to `pjsua_acc_config.transport_id`,
+    /// overriding PJSIP's auto-resolution logic.  This is required for TLS accounts
+    /// because auto-resolution fails with `PJSIP_EUNSUPTRANSPORT` when the TLS
+    /// transport has not yet been matched to the URI scheme.  Set to `None` to keep
+    /// the default (`PJSUA_INVALID_ID = -1`) and let PJSIP auto-resolve.
+    pub transport_id: Option<i32>,
 }
 
 impl Default for AccountConfig {
@@ -384,6 +392,7 @@ impl Default for AccountConfig {
             reg_retry_interval: None,
             rtp_port_start: None,
             rtp_port_range: None,
+            transport_id: None,
         }
     }
 }

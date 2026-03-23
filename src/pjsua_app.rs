@@ -287,8 +287,27 @@ impl PjsuaApp {
                 id.0, status
             );
         }
+        // Delete the account, retrying if EBUSY (in-flight REGISTER
+        // transaction hasn't completed yet after set_registration(false)).
         let status = unsafe { ffi::pjsua_acc_del(id.0) };
-        check_status(status)?;
+        if status == 171001 {
+            // PJSIP_EBUSY — wait for the in-flight transaction to settle
+            warn!("account {} busy, retrying removal after 200ms", id.0);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let status = unsafe { ffi::pjsua_acc_del(id.0) };
+            if status == 171001 {
+                warn!("account {} still busy, retrying removal after 500ms", id.0);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let status = unsafe { ffi::pjsua_acc_del(id.0) };
+                if status != 0 {
+                    warn!("account {} removal failed after retries (status={})", id.0, status);
+                }
+            } else if status != 0 {
+                check_status(status)?;
+            }
+        } else {
+            check_status(status)?;
+        }
         info!("account removed: id={}", id.0);
         Ok(())
     }
@@ -840,6 +859,12 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
         if let Some(range) = config.rtp_port_range {
             acc_cfg.rtp_cfg.port_range = range as u32;
         }
+    }
+
+    // Pin account to a specific transport (avoids PJSIP auto-resolution
+    // failures for TLS where EUNSUPTRANSPORT can occur).
+    if let Some(tp_id) = config.transport_id {
+        acc_cfg.transport_id = tp_id;
     }
 
     strings
