@@ -248,7 +248,7 @@ impl PjsuaApp {
         let mut acc_id: ffi::pjsua_acc_id = -1;
         let status = unsafe { ffi::pjsua_acc_add(&acc_cfg, 0, &mut acc_id) };
         check_status(status)?;
-        info!("account added: id={acc_id} name={}", config.name);
+        debug!("account added: id={acc_id} name={}", config.name);
         Ok(AccountId(acc_id))
     }
 
@@ -848,9 +848,14 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
         strings.push(proxy_str);
     }
 
-    // Registration retry interval
+    // Registration retry interval (for auth failures like 401/403)
+    // and first retry interval (for transport failures like server unreachable).
+    // Both must be set — PJSIP uses reg_first_retry_interval for transport
+    // failures and defaults it to 0 (no retry), which causes the device to
+    // stay unregistered when the server is temporarily down.
     if let Some(interval) = config.reg_retry_interval {
         acc_cfg.reg_retry_interval = interval;
+        acc_cfg.reg_first_retry_interval = interval;
     }
 
     // RTP port range (for media transport)
