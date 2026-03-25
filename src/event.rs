@@ -10,7 +10,7 @@ use tracing::{error, trace};
 
 use crate::ffi;
 use crate::ffi_helpers::pj_str_to_string;
-use crate::types::{AccountId, CallId, CallState, ConfPort, MediaStatus};
+use crate::types::{AccountId, CallId, CallState, ConfPort, MediaStatus, SipMessageInfo};
 
 // ---------------------------------------------------------------------------
 // SipEvent enum
@@ -55,6 +55,12 @@ pub enum SipEvent {
         status_code: u16,
         status_text: String,
         is_final: bool,
+    },
+    /// A SIP message was sent or received for a call (for tracing).
+    SipMessageTrace {
+        call_id: CallId,
+        account_id: AccountId,
+        info: SipMessageInfo,
     },
 }
 
@@ -118,13 +124,22 @@ pub(crate) unsafe extern "C" fn on_reg_state(acc_id: ffi::pjsua_acc_id) {
 pub(crate) unsafe extern "C" fn on_incoming_call(
     acc_id: ffi::pjsua_acc_id,
     call_id: ffi::pjsua_call_id,
-    _rdata: *mut ffi::pjsip_rx_data,
+    rdata: *mut ffi::pjsip_rx_data,
 ) {
     let mut info: ffi::pjsua_call_info = Default::default();
     let status = unsafe { ffi::pjsua_call_get_info(call_id, &mut info) };
     if status != 0 {
         error!("pjsua_call_get_info failed: {status}");
         return;
+    }
+
+    // Emit trace event from received INVITE
+    if let Some(msg_info) = unsafe { crate::ffi_helpers::extract_from_rx_data(rdata) } {
+        send_event(SipEvent::SipMessageTrace {
+            call_id: CallId(call_id),
+            account_id: AccountId(acc_id),
+            info: msg_info,
+        });
     }
 
     let remote_uri = pj_str_to_string(&info.remote_info);
@@ -139,13 +154,25 @@ pub(crate) unsafe extern "C" fn on_incoming_call(
 /// `on_call_state` callback — call state changed.
 pub(crate) unsafe extern "C" fn on_call_state(
     call_id: ffi::pjsua_call_id,
-    _e: *mut ffi::pjsip_event,
+    e: *mut ffi::pjsip_event,
 ) {
     let mut info: ffi::pjsua_call_info = Default::default();
     let status = unsafe { ffi::pjsua_call_get_info(call_id, &mut info) };
     if status != 0 {
         error!("pjsua_call_get_info failed: {status}");
         return;
+    }
+
+    // Emit trace event from the SIP message that caused this state change
+    if let Some(mut msg_info) = unsafe { crate::ffi_helpers::extract_from_event(e) } {
+        if msg_info.sip_call_id.is_empty() {
+            msg_info.sip_call_id = pj_str_to_string(&info.call_id);
+        }
+        send_event(SipEvent::SipMessageTrace {
+            call_id: CallId(call_id),
+            account_id: AccountId(info.acc_id),
+            info: msg_info,
+        });
     }
 
     let state = CallState::from_pjsip(info.state);

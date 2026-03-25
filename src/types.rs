@@ -312,6 +312,25 @@ pub struct PjsuaConfig {
     pub null_audio: bool,
 }
 
+/// Direction of a traced SIP message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceDirection {
+    Sent,
+    Received,
+}
+
+/// Extracted information from a SIP message for tracing.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SipMessageInfo {
+    pub direction: TraceDirection,
+    pub method_or_status: String,
+    pub sip_call_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdp: Option<String>,
+    pub headers: std::collections::HashMap<String, String>,
+}
+
 impl Default for PjsuaConfig {
     fn default() -> Self {
         PjsuaConfig {
