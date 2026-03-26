@@ -274,6 +274,7 @@ dependencies = [
  "anyhow",
  "bindgen",
  "cc",
+ "log",
  "pkg-config",
  "serde",
  "thiserror",

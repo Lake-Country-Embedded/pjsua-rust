@@ -3,9 +3,9 @@
 //! [`PjsuaApp`] manages pjsua_create / pjsua_init / pjsua_start / pjsua_destroy
 //! and exposes safe wrappers for the most commonly used PJSUA operations.
 
+use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::os::raw::c_uint;
 
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -27,6 +27,39 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Flag for `pjsua_call_reinvite` to take a call off hold.
 const PJSUA_CALL_UNHOLD: u32 = 1;
+
+/// PJSIP log callback that bridges native C logs into the Rust `log` crate.
+///
+/// Maps PJSIP log levels to log levels:
+///   1 = error, 2 = warn, 3 = info, 4 = debug, 5+ = trace
+///
+/// This replaces PJSIP's default console output so all SIP protocol messages
+/// (including SDP) flow through the structured logging system with correct
+/// severity levels and without duplicated timestamps.
+unsafe extern "C" fn pjsip_log_cb(level: c_int, data: *const c_char, len: c_int) {
+    if data.is_null() || len <= 0 {
+        return;
+    }
+    // SAFETY: PJSIP guarantees `data` points to `len` valid bytes.
+    let slice = unsafe { std::slice::from_raw_parts(data as *const u8, len as usize) };
+    let msg = String::from_utf8_lossy(slice);
+    // Trim trailing newline and PJSIP's leading timestamp (format: "HH:MM:SS.mmm")
+    let msg = msg.trim();
+    let msg = if msg.len() > 16 && msg.as_bytes().get(2) == Some(&b':') {
+        // Skip "HH:MM:SS.mmm" + whitespace prefix
+        msg.get(16..).map(|s| s.trim_start()).unwrap_or(msg)
+    } else {
+        msg
+    };
+
+    match level {
+        1 => log::error!(target: "pjsip", "{msg}"),
+        2 => log::warn!(target: "pjsip", "{msg}"),
+        3 => log::info!(target: "pjsip", "{msg}"),
+        4 => log::debug!(target: "pjsip", "{msg}"),
+        _ => log::trace!(target: "pjsip", "{msg}"),
+    }
+}
 
 /// RAII wrapper around the PJSUA library.
 ///
@@ -100,10 +133,13 @@ impl PjsuaApp {
         ua_cfg.cb.on_call_transfer_status = Some(event::on_call_transfer_status);
 
         // --- logging config ---
+        // Route PJSIP logs through the Rust tracing/log system via callback.
+        // Disable console output to avoid duplicate raw lines on stdout.
         let mut log_cfg: ffi::pjsua_logging_config = Default::default();
         unsafe { ffi::pjsua_logging_config_default(&mut log_cfg) };
         log_cfg.level = config.log_level;
-        log_cfg.console_level = config.log_level;
+        log_cfg.console_level = 0;
+        log_cfg.cb = Some(pjsip_log_cb);
 
         // --- media config ---
         let mut media_cfg: ffi::pjsua_media_config = Default::default();
