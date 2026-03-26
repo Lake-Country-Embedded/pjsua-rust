@@ -893,12 +893,17 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
     // SRTP
     acc_cfg.use_srtp = config.srtp.to_pjsip();
 
-    // Disable NAT contact/via rewriting — keep the local IP in Contact and Via
-    // headers and let the registrar use rport/received to track the NAT mapping.
-    // Without this, PJSIP rewrites headers with the STUN-resolved public IP after
-    // the first registration response, which breaks incoming calls on many PBXes.
+    // Keep Contact header stable (local IP) — PBXes using rport/received
+    // for NAT tracking are not confused by a rewritten Contact.
     acc_cfg.allow_contact_rewrite = 0;
-    acc_cfg.allow_via_rewrite = 0;
+    // Allow PJSIP to learn NAT-mapped address from Via received= parameter.
+    // This updates the transport's published address for correct SDP generation.
+    acc_cfg.allow_via_rewrite = 1;
+    // Use the NAT-learned address in SDP c= line — essential for cloud
+    // providers (RingCentral etc.) that send RTP to the SDP address.
+    // Without this, the SDP advertises the private LAN IP which is
+    // unreachable from the internet, causing no audio both ways.
+    acc_cfg.allow_sdp_nat_rewrite = 1;
 
     // Registration timeout
     if let Some(timeout) = config.reg_timeout {
