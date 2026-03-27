@@ -4,13 +4,14 @@
 //! Each callback converts raw FFI data into a [`SipEvent`] and sends it
 //! through a `tokio::sync::mpsc::UnboundedSender`.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tracing::{error, trace};
 
 use crate::ffi;
 use crate::ffi_helpers::pj_str_to_string;
-use crate::types::{AccountId, CallId, CallState, ConfPort, MediaStatus, SipMessageInfo};
+use crate::types::{AccountId, CallId, CallState, ConfPort, MediaStatus, SipMessageInfo, TraceDirection};
 
 // ---------------------------------------------------------------------------
 // SipEvent enum
@@ -31,6 +32,7 @@ pub enum SipEvent {
         account_id: AccountId,
         call_id: CallId,
         remote_uri: String,
+        sip_call_id: String,
     },
     /// The state of a call has changed.
     CallState {
@@ -124,7 +126,7 @@ pub(crate) unsafe extern "C" fn on_reg_state(acc_id: ffi::pjsua_acc_id) {
 pub(crate) unsafe extern "C" fn on_incoming_call(
     acc_id: ffi::pjsua_acc_id,
     call_id: ffi::pjsua_call_id,
-    rdata: *mut ffi::pjsip_rx_data,
+    _rdata: *mut ffi::pjsip_rx_data,
 ) {
     let mut info: ffi::pjsua_call_info = Default::default();
     let status = unsafe { ffi::pjsua_call_get_info(call_id, &mut info) };
@@ -133,46 +135,27 @@ pub(crate) unsafe extern "C" fn on_incoming_call(
         return;
     }
 
-    // Emit trace event from received INVITE
-    if let Some(msg_info) = unsafe { crate::ffi_helpers::extract_from_rx_data(rdata) } {
-        send_event(SipEvent::SipMessageTrace {
-            call_id: CallId(call_id),
-            account_id: AccountId(acc_id),
-            info: msg_info,
-        });
-    }
-
     let remote_uri = pj_str_to_string(&info.remote_info);
+    let sip_call_id = pj_str_to_string(&info.call_id);
 
     send_event(SipEvent::IncomingCall {
         account_id: AccountId(acc_id),
         call_id: CallId(call_id),
         remote_uri,
+        sip_call_id,
     });
 }
 
 /// `on_call_state` callback — call state changed.
 pub(crate) unsafe extern "C" fn on_call_state(
     call_id: ffi::pjsua_call_id,
-    e: *mut ffi::pjsip_event,
+    _e: *mut ffi::pjsip_event,
 ) {
     let mut info: ffi::pjsua_call_info = Default::default();
     let status = unsafe { ffi::pjsua_call_get_info(call_id, &mut info) };
     if status != 0 {
         error!("pjsua_call_get_info failed: {status}");
         return;
-    }
-
-    // Emit trace event from the SIP message that caused this state change
-    if let Some(mut msg_info) = unsafe { crate::ffi_helpers::extract_from_event(e) } {
-        if msg_info.sip_call_id.is_empty() {
-            msg_info.sip_call_id = pj_str_to_string(&info.call_id);
-        }
-        send_event(SipEvent::SipMessageTrace {
-            call_id: CallId(call_id),
-            account_id: AccountId(info.acc_id),
-            info: msg_info,
-        });
     }
 
     let state = CallState::from_pjsip(info.state);
@@ -259,6 +242,90 @@ pub(crate) unsafe extern "C" fn on_call_transfer_status(
 }
 
 // ---------------------------------------------------------------------------
+// PJSIP trace module (C helper) — sees ALL SIP messages
+// ---------------------------------------------------------------------------
+
+extern "C" {
+    fn sip_trace_module_register() -> ffi::pj_status_t;
+    fn sip_trace_module_unregister();
+}
+
+/// Register the PJSIP trace module. Call after `pjsua_start()`.
+pub(crate) fn register_trace_module() {
+    let status = unsafe { sip_trace_module_register() };
+    if status != 0 {
+        error!("sip_trace_module_register failed: {status}");
+    }
+}
+
+/// Unregister the PJSIP trace module. Call before `pjsua_destroy()`.
+pub(crate) fn unregister_trace_module() {
+    unsafe { sip_trace_module_unregister() };
+}
+
+/// FFI callback invoked from `trace_module.c` for every SIP message.
+///
+/// Converts the C data into a [`SipEvent::SipMessageTrace`] and sends it
+/// through the event channel. The `call_id` is set to `CallId(-1)` since
+/// the PJSIP module doesn't know the PJSUA call index — the consumer
+/// correlates by `sip_call_id` string.
+#[no_mangle]
+pub extern "C" fn rust_sip_trace_on_msg(
+    is_outgoing: std::os::raw::c_int,
+    method_or_status: *const std::os::raw::c_char,
+    method_or_status_len: std::os::raw::c_int,
+    sip_call_id: *const std::os::raw::c_char,
+    sip_call_id_len: std::os::raw::c_int,
+    sdp_body: *const std::os::raw::c_char,
+    sdp_body_len: std::os::raw::c_int,
+) {
+    let mos = if method_or_status.is_null() || method_or_status_len <= 0 {
+        String::new()
+    } else {
+        let slice = unsafe {
+            std::slice::from_raw_parts(method_or_status as *const u8, method_or_status_len as usize)
+        };
+        String::from_utf8_lossy(slice).to_string()
+    };
+
+    let call_id_str = if sip_call_id.is_null() || sip_call_id_len <= 0 {
+        String::new()
+    } else {
+        let slice = unsafe {
+            std::slice::from_raw_parts(sip_call_id as *const u8, sip_call_id_len as usize)
+        };
+        String::from_utf8_lossy(slice).to_string()
+    };
+
+    let sdp = if sdp_body.is_null() || sdp_body_len <= 0 {
+        None
+    } else {
+        let slice = unsafe {
+            std::slice::from_raw_parts(sdp_body as *const u8, sdp_body_len as usize)
+        };
+        Some(String::from_utf8_lossy(slice).to_string())
+    };
+
+    let direction = if is_outgoing != 0 {
+        TraceDirection::Sent
+    } else {
+        TraceDirection::Received
+    };
+
+    send_event(SipEvent::SipMessageTrace {
+        call_id: CallId(-1),
+        account_id: AccountId(-1),
+        info: SipMessageInfo {
+            direction,
+            method_or_status: mos,
+            sip_call_id: call_id_str,
+            sdp,
+            headers: HashMap::new(),
+        },
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -285,6 +352,7 @@ mod tests {
             account_id: AccountId(1),
             call_id: CallId(0),
             remote_uri: "sip:alice@example.com".into(),
+            sip_call_id: "test-call-id".into(),
         };
         let cloned = event.clone();
         let debug_orig = format!("{:?}", event);

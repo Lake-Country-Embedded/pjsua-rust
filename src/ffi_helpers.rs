@@ -62,6 +62,9 @@ pub fn pj_str_to_string(pj_str: &ffi::pj_str_t) -> String {
     String::from_utf8_lossy(slice).to_string()
 }
 
+// The following extraction helpers are not currently used (the C trace module
+// handles message extraction directly), but are retained for potential future use.
+#[allow(dead_code)]
 /// Extract the SDP body from a `pjsip_msg_body` by invoking its `print_body` callback.
 ///
 /// Returns `None` if `body` is null, the callback is absent, or the printed length is zero.
@@ -86,6 +89,7 @@ pub unsafe fn extract_sdp_body(body: *mut ffi::pjsip_msg_body) -> Option<String>
     Some(String::from_utf8_lossy(&buf).to_string())
 }
 
+#[allow(dead_code)]
 /// Extract a [`SipMessageInfo`] from a parsed `pjsip_msg`.
 ///
 /// The returned `sip_call_id` is empty and `headers` is empty; the caller is
@@ -123,6 +127,7 @@ pub unsafe fn extract_sip_msg_info(
     })
 }
 
+#[allow(dead_code)]
 /// Extract a [`SipMessageInfo`] from a received-data buffer (`pjsip_rx_data`).
 ///
 /// Fills `sip_call_id` from the pre-parsed `cid` header and adds a `CSeq`
@@ -157,6 +162,7 @@ pub unsafe fn extract_from_rx_data(
     Some(info)
 }
 
+#[allow(dead_code)]
 /// Extract a [`SipMessageInfo`] from a `pjsip_event`.
 ///
 /// Only `PJSIP_EVENT_TSX_STATE` events carry a message; all other event types

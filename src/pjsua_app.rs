@@ -175,6 +175,9 @@ impl PjsuaApp {
         }
         info!("PJSUA started");
 
+        // Register the SIP trace module now that PJSIP is running.
+        event::register_trace_module();
+
         Ok((PjsuaApp { _private: () }, rx))
     }
 
@@ -1004,6 +1007,7 @@ impl Drop for PjsuaApp {
         // 3. Destroy PJSUA — tears down all PJSIP state (accounts, calls, etc.).
         // 4. Reset the singleton flag — allows a new PjsuaApp to be created.
         unsafe { ffi::pjsua_stop_worker_threads() };
+        event::unregister_trace_module();
         event::clear_event_sender();
         unsafe { ffi::pjsua_destroy() };
         INITIALIZED.store(false, Ordering::SeqCst);

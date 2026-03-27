@@ -146,6 +146,7 @@ async fn main() -> Result<()> {
                     call_id,
                     account_id,
                     remote_uri,
+                    ..
                 } => {
                     info!(
                         "Incoming call: call={:?} account={:?} from={}",

@@ -39,6 +39,7 @@ fn test_sip_event_variants() {
             account_id: AccountId(0),
             call_id: CallId(0),
             remote_uri: "sip:alice@example.com".into(),
+            sip_call_id: "test-id".into(),
         },
         SipEvent::CallState {
             call_id: CallId(0),

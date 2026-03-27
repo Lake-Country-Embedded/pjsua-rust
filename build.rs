@@ -81,6 +81,7 @@ fn main() {
         .allowlist_function("pjsua_handle_events")
         .allowlist_function("pjsua_stop_worker_threads")
         .allowlist_function("pjsua_detect_nat_type")
+        .allowlist_function("pjsua_get_pjsip_endpt")
         // Logging
         .allowlist_function("pjsua_logging_config_default")
         .allowlist_function("pjsua_config_default")
@@ -220,4 +221,18 @@ fn main() {
         }
     }
     cc_build.compile("transport_helper");
+
+    // Compile the SIP trace module
+    let mut cc_trace = cc::Build::new();
+    cc_trace.file("src/trace_module.c");
+    for path in &lib.include_paths {
+        cc_trace.include(path);
+    }
+    for (key, val) in &lib.defines {
+        match val {
+            Some(v) => { cc_trace.define(key, v.as_str()); }
+            None => { cc_trace.define(key, None); }
+        }
+    }
+    cc_trace.compile("trace_module");
 }
