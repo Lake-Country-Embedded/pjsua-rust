@@ -31,7 +31,14 @@ pub enum SipEvent {
     IncomingCall {
         account_id: AccountId,
         call_id: CallId,
+        /// Remote party URI from the From: header (e.g. caller).
         remote_uri: String,
+        /// Local party URI from the To: header (e.g. callee) — i.e. the
+        /// user the incoming INVITE was addressed to. Useful for
+        /// overriding PJSUA's default account matching when a P2P
+        /// account with server=local_bound_ip would otherwise swallow
+        /// PBX-forwarded calls for registered accounts.
+        local_uri: String,
         sip_call_id: String,
     },
     /// The state of a call has changed.
@@ -136,12 +143,14 @@ pub(crate) unsafe extern "C" fn on_incoming_call(
     }
 
     let remote_uri = pj_str_to_string(&info.remote_info);
+    let local_uri = pj_str_to_string(&info.local_info);
     let sip_call_id = pj_str_to_string(&info.call_id);
 
     send_event(SipEvent::IncomingCall {
         account_id: AccountId(acc_id),
         call_id: CallId(call_id),
         remote_uri,
+        local_uri,
         sip_call_id,
     });
 }
@@ -352,6 +361,7 @@ mod tests {
             account_id: AccountId(1),
             call_id: CallId(0),
             remote_uri: "sip:alice@example.com".into(),
+            local_uri: "sip:bob@example.com".into(),
             sip_call_id: "test-call-id".into(),
         };
         let cloned = event.clone();
