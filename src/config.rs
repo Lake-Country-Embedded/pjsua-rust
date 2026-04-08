@@ -43,6 +43,9 @@ pub struct GeneralConfig {
     pub clock_rate: u32,
     #[serde(default = "default_true")]
     pub null_audio: bool,
+    /// Optional User-Agent string. Maps to [`PjsuaConfig::user_agent`].
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 impl Default for GeneralConfig {
@@ -51,6 +54,7 @@ impl Default for GeneralConfig {
             log_level: default_log_level(),
             clock_rate: default_clock_rate(),
             null_audio: default_true(),
+            user_agent: None,
         }
     }
 }
@@ -138,6 +142,13 @@ impl Config {
             log_level: self.general.log_level,
             clock_rate: self.general.clock_rate,
             null_audio: self.general.null_audio,
+            user_agent: self.general.user_agent.clone(),
+            // TOML-based config doesn't populate nameservers;
+            // consumers that need the async resolver populate the
+            // field directly on `PjsuaConfig`. Defaulting to an
+            // empty list keeps pjsua's synchronous getaddrinfo
+            // fallback for standalone TOML-driven tools.
+            nameservers: Vec::new(),
         }
     }
 

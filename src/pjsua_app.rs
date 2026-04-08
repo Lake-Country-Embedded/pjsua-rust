@@ -16,6 +16,28 @@ extern "C" {
     fn pjsip_tsx_set_timers(t1: c_uint, t2: c_uint, t4: c_uint, td: c_uint);
 }
 
+// Runtime DNS resolver update. Not in the bindgen allowlist — declared
+// manually alongside a local opaque type for `pj_dns_resolver` so we
+// don't need to pull in all of `pjlib-util/resolver.h`.
+#[repr(C)]
+pub struct pj_dns_resolver {
+    _opaque: [u8; 0],
+}
+extern "C" {
+    fn pjsip_endpt_get_resolver(endpt: *mut ffi::pjsip_endpoint) -> *mut pj_dns_resolver;
+    /// `pj_dns_resolver_set_ns(resolver, count, servers, ports)` — update
+    /// the nameserver list on an existing resolver. `ports` may be null,
+    /// in which case DNS defaults to port 53 for every entry. PJSIP takes
+    /// internal copies of `servers[*]`, so the caller's backing strings
+    /// don't need to outlive this call.
+    fn pj_dns_resolver_set_ns(
+        resolver: *mut pj_dns_resolver,
+        count: c_uint,
+        servers: *const ffi::pj_str_t,
+        ports: *const c_uint,
+    ) -> i32;
+}
+
 use crate::error::{check_status, make_pj_error, PjError, Result};
 use crate::event::{self, SipEvent};
 use crate::ffi;
@@ -132,6 +154,63 @@ impl PjsuaApp {
         ua_cfg.cb.on_dtmf_digit2 = Some(event::on_dtmf_digit2);
         ua_cfg.cb.on_call_transfer_status = Some(event::on_call_transfer_status);
 
+        // Optional User-Agent header. Must outlive the `pjsua_init` call below;
+        // PJSIP copies the string into its own pool during init.
+        let user_agent_holder = config
+            .user_agent
+            .as_ref()
+            .map(|s| PjString::new(s));
+        if let Some(ua) = user_agent_holder.as_ref() {
+            ua_cfg.user_agent = ua.as_pj_str();
+        }
+
+        // Async DNS resolver configuration. When nameservers are
+        // provided, pjsua creates a `pj_dns_resolver` during
+        // `pjsua_init` and uses it (instead of the platform's
+        // synchronous `getaddrinfo`) for all subsequent SIP URI
+        // resolution. This eliminates the classic multi-second hang
+        // where `pjsua_acc_add` or `pjsua_acc_set_registration`
+        // blocks in `getaddrinfo` on an unreachable resolver — the
+        // async path fires callbacks from PJLIB's I/O queue without
+        // blocking the calling thread.
+        //
+        // PJSIP's nameserver[] array is fixed at 4 entries. Extras
+        // are logged and dropped. The `PjString` holders must
+        // outlive the `pjsua_init` call because PJSIP copies the
+        // strings into its own pool during init.
+        const MAX_NAMESERVERS: usize = 4;
+        let nameservers_to_use: Vec<&String> = config
+            .nameservers
+            .iter()
+            .take(MAX_NAMESERVERS)
+            .collect();
+        if config.nameservers.len() > MAX_NAMESERVERS {
+            log::warn!(
+                "pjsua: {} nameserver(s) provided, truncating to first {}",
+                config.nameservers.len(),
+                MAX_NAMESERVERS
+            );
+        }
+        let nameserver_holders: Vec<PjString> = nameservers_to_use
+            .iter()
+            .map(|ns| PjString::new(ns))
+            .collect();
+        for (i, holder) in nameserver_holders.iter().enumerate() {
+            ua_cfg.nameserver[i] = holder.as_pj_str();
+        }
+        ua_cfg.nameserver_count = nameserver_holders.len() as u32;
+        if !nameserver_holders.is_empty() {
+            info!(
+                "pjsua: async DNS resolver enabled with {} nameserver(s): {:?}",
+                nameserver_holders.len(),
+                nameservers_to_use
+            );
+        } else {
+            debug!(
+                "pjsua: no nameservers configured — falling back to synchronous getaddrinfo"
+            );
+        }
+
         // --- logging config ---
         // Route PJSIP logs through the Rust tracing/log system via callback.
         // Disable console output to avoid duplicate raw lines on stdout.
@@ -201,6 +280,82 @@ impl PjsuaApp {
         // Must set both t1 AND td — PJSIP's timeout_timer_val is only
         // updated when td is explicitly provided (not derived from t1).
         unsafe { pjsip_tsx_set_timers(t1_ms, 0, 0, td_ms) };
+    }
+
+    // ------------------------------------------------------------------
+    // DNS Resolver
+    // ------------------------------------------------------------------
+
+    /// Update the PJSIP async DNS resolver's nameserver list at
+    /// runtime.
+    ///
+    /// The resolver object must already exist — it's created by
+    /// `pjsua_init` when `pjsua_config.nameserver_count > 0`. If
+    /// you start with an empty nameserver list, no resolver is
+    /// created and this call is a no-op with a warning. Bootstrap
+    /// with something (e.g. Google DNS `8.8.8.8`) at init time if
+    /// you want to swap the list out later.
+    ///
+    /// Accepts up to 4 nameservers (PJSIP's hardcoded limit).
+    /// Extras are logged and dropped. Empty list is rejected.
+    ///
+    /// The caller's thread must be PJLIB-registered. The function
+    /// allocates short-lived `pj_str_t` wrappers on the stack and
+    /// PJSIP copies the backing strings internally before returning,
+    /// so no lifetime concerns for the caller.
+    pub fn set_nameservers(&self, servers: &[String]) -> Result<()> {
+        if servers.is_empty() {
+            warn!("set_nameservers called with empty list — ignoring");
+            return Ok(());
+        }
+        const MAX: usize = 4;
+        let take: Vec<&String> = servers.iter().take(MAX).collect();
+        if servers.len() > MAX {
+            warn!(
+                "set_nameservers: {} nameserver(s) provided, truncating to first {}",
+                servers.len(),
+                MAX
+            );
+        }
+
+        // PjString holders keep the backing bytes alive for the
+        // duration of the FFI call. `pj_dns_resolver_set_ns` copies
+        // them internally into the resolver's own pool.
+        let holders: Vec<PjString> = take.iter().map(|s| PjString::new(s)).collect();
+        let pj_strs: Vec<ffi::pj_str_t> = holders.iter().map(|h| h.as_pj_str()).collect();
+
+        unsafe {
+            let endpt = ffi::pjsua_get_pjsip_endpt();
+            if endpt.is_null() {
+                return Err(PjError::NotInitialized);
+            }
+            let resolver = pjsip_endpt_get_resolver(endpt);
+            if resolver.is_null() {
+                warn!(
+                    "set_nameservers: no DNS resolver object exists — \
+                     pjsua was initialized with an empty nameserver list. \
+                     Bootstrap with at least one entry at init time to \
+                     enable runtime updates."
+                );
+                return Ok(());
+            }
+            let status = pj_dns_resolver_set_ns(
+                resolver,
+                pj_strs.len() as c_uint,
+                pj_strs.as_ptr(),
+                ptr::null(),
+            );
+            if status != 0 {
+                return Err(make_pj_error(status));
+            }
+        }
+
+        info!(
+            "PJSIP DNS resolver nameservers updated: {} entries: {:?}",
+            pj_strs.len(),
+            take
+        );
+        Ok(())
     }
 
     // ------------------------------------------------------------------

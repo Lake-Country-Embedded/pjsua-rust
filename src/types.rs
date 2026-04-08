@@ -310,6 +310,30 @@ pub struct PjsuaConfig {
     pub clock_rate: u32,
     /// Use null audio device (no real audio hardware).
     pub null_audio: bool,
+    /// Optional User-Agent string sent on outbound SIP requests and as the
+    /// Server header on responses. When `None`, PJSIP's built-in default is
+    /// used. Set at `Pjsua::new` time; cannot be changed after init.
+    pub user_agent: Option<String>,
+    /// DNS nameservers to populate into PJSIP's **async** resolver.
+    ///
+    /// When this list is non-empty, pjsua configures
+    /// `pjsua_config::nameserver` / `nameserver_count` and PJSIP
+    /// spins up its own `pj_dns_resolver` that performs async DNS
+    /// over UDP using PJLIB's I/O queue. All subsequent pjsua calls
+    /// that need DNS resolution (`pjsua_acc_add`,
+    /// `pjsua_acc_set_registration`, outbound SIP calls) go through
+    /// this resolver instead of calling `getaddrinfo` synchronously
+    /// on the caller's thread. Blocking `getaddrinfo` on a bad
+    /// network is the classic cause of multi-second hangs in pjsua
+    /// account operations; the async resolver eliminates that class
+    /// of hang entirely.
+    ///
+    /// When empty, pjsua falls back to synchronous `getaddrinfo`
+    /// via the platform resolver (previous behavior).
+    ///
+    /// Maximum of 4 entries — pjsua's `nameserver[]` array is fixed
+    /// at compile time. Extras are ignored with a warning.
+    pub nameservers: Vec<String>,
 }
 
 /// Direction of a traced SIP message.
@@ -337,6 +361,8 @@ impl Default for PjsuaConfig {
             log_level: 3,
             clock_rate: 16000,
             null_audio: true,
+            user_agent: None,
+            nameservers: Vec::new(),
         }
     }
 }
