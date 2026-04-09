@@ -1051,17 +1051,16 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
     // SRTP
     acc_cfg.use_srtp = config.srtp.to_pjsip();
 
-    // Keep Contact header stable (local IP) — PBXes using rport/received
-    // for NAT tracking are not confused by a rewritten Contact.
+    // Disable PJSIP's NAT header/SDP rewriting. These flags cause PJSIP to
+    // learn a "public" address from the registrar's Via received=/rport and
+    // mutate the shared transport's published address, which breaks setups
+    // with multiple accounts, upstream SBCs/proxies, or peers whose view of
+    // our NAT binding differs from the registrar's. The proper fix for
+    // private-IP-in-SDP is STUN/ICE or an explicit rtp_cfg.public_addr,
+    // not these blunt per-response rewrites.
     acc_cfg.allow_contact_rewrite = 0;
-    // Allow PJSIP to learn NAT-mapped address from Via received= parameter.
-    // This updates the transport's published address for correct SDP generation.
-    acc_cfg.allow_via_rewrite = 1;
-    // Use the NAT-learned address in SDP c= line — essential for cloud
-    // providers (RingCentral etc.) that send RTP to the SDP address.
-    // Without this, the SDP advertises the private LAN IP which is
-    // unreachable from the internet, causing no audio both ways.
-    acc_cfg.allow_sdp_nat_rewrite = 1;
+    acc_cfg.allow_via_rewrite = 0;
+    acc_cfg.allow_sdp_nat_rewrite = 0;
 
     // Registration timeout
     if let Some(timeout) = config.reg_timeout {
