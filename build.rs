@@ -154,6 +154,8 @@ fn main() {
         .allowlist_function("pjsua_snd_is_active")
         // Codec
         .allowlist_function("pjsua_codec_set_priority")
+        .allowlist_function("pjsua_enum_codecs")
+        .allowlist_type("pjsua_codec_info")
         // Buddy
         .allowlist_function("pjsua_verify_sip_url")
         .allowlist_function("pjsua_verify_url")

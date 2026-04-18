@@ -982,6 +982,39 @@ impl PjsuaApp {
         let status = unsafe { ffi::pjsua_codec_set_priority(&pj_codec, priority) };
         check_status(status)
     }
+
+    /// Enumerate every audio codec PJSIP currently has registered, with its
+    /// internal codec-id string and current priority. Use this at startup
+    /// to confirm that `set_codec_priority` calls actually landed on the
+    /// intended codecs — the function matches by prefix and silently
+    /// ignores mismatches.
+    pub fn enum_codecs(&self) -> Result<Vec<(String, u8)>> {
+        const MAX_CODECS: usize = 32;
+        let mut infos: [ffi::pjsua_codec_info; MAX_CODECS] =
+            unsafe { std::mem::zeroed() };
+        let mut count = MAX_CODECS as std::os::raw::c_uint;
+        let status =
+            unsafe { ffi::pjsua_enum_codecs(infos.as_mut_ptr(), &mut count) };
+        check_status(status)?;
+
+        let mut out = Vec::with_capacity(count as usize);
+        for info in infos.iter().take(count as usize) {
+            // codec_id is a pj_str_t (ptr + slen). Build a Rust String.
+            let id = if info.codec_id.ptr.is_null() || info.codec_id.slen <= 0 {
+                String::new()
+            } else {
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        info.codec_id.ptr as *const u8,
+                        info.codec_id.slen as usize,
+                    )
+                };
+                String::from_utf8_lossy(bytes).into_owned()
+            };
+            out.push((id, info.priority));
+        }
+        Ok(out)
+    }
 }
 
 /// C trampoline for WAV player EOF callback.
