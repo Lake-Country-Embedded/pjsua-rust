@@ -184,7 +184,15 @@ unsafe extern "C" fn trampoline_get_frame(
             timestamp: (*frame).timestamp.u64_,
         };
         match port_impl.get_frame(&mut audio_frame) {
-            Ok(()) => 0,
+            Ok(()) => {
+                // Signal to PJSUA's conference bridge that this frame contains
+                // audio data. Without this, the bridge treats every frame as
+                // PJMEDIA_FRAME_TYPE_NONE (0) and zero-fills the sample buffer,
+                // silencing all audio even when get_frame() wrote real PCM data.
+                (*frame).type_ =
+                    ffi::pjmedia_frame_type_PJMEDIA_FRAME_TYPE_AUDIO;
+                0
+            }
             Err(_) => -1,
         }
     }));
