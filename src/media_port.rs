@@ -41,15 +41,29 @@ pub trait MediaPort: Send + 'static {
     fn on_destroy(&mut self) {}
 }
 
+/// Heap-allocated context owned by a `CustomPort`'s `pjmedia_port` and freed
+/// in [`trampoline_on_destroy`]. PJSIP reaches it through `port_data.pdata`.
+///
+/// Ownership of these resources is transferred to PJSIP for the duration of
+/// the port's lifetime so they outlive `CustomPort::drop`. PJSIP's queued
+/// port-removal (`pjmedia_conf_remove_port`) runs `op_remove_port` later on
+/// the audio clock thread and dereferences the `pjmedia_port` struct (to read
+/// `grp_lock`); the `pjmedia_port_info.name` pj_str_t aliases bytes inside
+/// `_name`. Freeing any of this in `Drop` is therefore a use-after-free.
+struct PortContext {
+    impl_box: Box<dyn MediaPort>,
+    /// Backs the `pjmedia_port_info.name` pj_str_t pointer. Must outlive the
+    /// `pjmedia_port` struct.
+    _name: PjString,
+}
+
 /// A custom audio port wrapping a MediaPort implementation.
 pub struct CustomPort {
     raw_port: *mut ffi::pjmedia_port,
-    _impl_box: *mut Box<dyn MediaPort>,
-    /// Keep the port name alive — pjmedia_port_info.name is a pj_str_t
-    /// pointing into this buffer.
-    _name: PjString,
     conf_port: Option<ConfPort>,
-    /// Pool allocated by conf_add_port, released on remove/drop.
+    /// Parent pool we passed to `pjsua_conf_add_port`. Only its factory is used
+    /// by PJSIP (the conf_port has its own child pool), so this is safe to
+    /// release any time after `conf_add_port` returns.
     conf_pool: Option<*mut ffi::pj_pool_t>,
 }
 
@@ -98,9 +112,12 @@ impl CustomPort {
             return Err(make_pj_error(status));
         }
 
-        let impl_box = Box::into_raw(Box::new(port_impl));
+        let context = Box::into_raw(Box::new(PortContext {
+            impl_box: port_impl,
+            _name: port_name,
+        }));
         unsafe {
-            (*raw_port).port_data.pdata = impl_box as *mut std::ffi::c_void;
+            (*raw_port).port_data.pdata = context as *mut std::ffi::c_void;
             (*raw_port).get_frame = Some(trampoline_get_frame);
             (*raw_port).put_frame = Some(trampoline_put_frame);
             (*raw_port).on_destroy = Some(trampoline_on_destroy);
@@ -109,8 +126,6 @@ impl CustomPort {
         debug!("custom port created: name={name}");
         Ok(CustomPort {
             raw_port,
-            _impl_box: impl_box,
-            _name: port_name,
             conf_port: None,
             conf_pool: None,
         })
@@ -128,6 +143,12 @@ impl CustomPort {
     }
 
     /// Remove this port from the conference bridge.
+    ///
+    /// Does *not* destroy the underlying `pjmedia_port` — that happens in
+    /// `Drop` (or when the port's `grp_lock` refcount hits zero, whichever
+    /// comes last). Calling this and then keeping the `CustomPort` alive is
+    /// fine: PJSIP still holds a `grp_lock` reference so the port struct
+    /// stays valid until `Drop` calls `pjmedia_port_destroy`.
     pub fn remove_from_conference(&mut self, app: &PjsuaApp) -> Result<()> {
         if let Some(port) = self.conf_port.take() {
             app.conf_remove_port(port)?;
@@ -152,16 +173,38 @@ impl CustomPort {
 
 impl Drop for CustomPort {
     fn drop(&mut self) {
+        // Release our resources in the order PJSIP expects:
+        //
+        //   1. `pjsua_conf_remove_port` queues a REMOVE_PORT op. PJSIP's audio
+        //      clock thread eventually runs `op_remove_port`, which calls
+        //      `pj_grp_lock_dec_ref` on `port->grp_lock` (the conf bridge's
+        //      reference, added when `create_conf_port` ran during add).
+        //
+        //   2. `pj_pool_release(conf_pool)` releases the parent pool we
+        //      handed `pjsua_conf_add_port`. PJSIP only used its factory to
+        //      spawn `conf_port`'s own child pool, so this is safe at any
+        //      point after add.
+        //
+        //   3. `pjmedia_port_destroy(raw_port)` releases *our* reference on
+        //      `port->grp_lock`. With `grp_lock` set (the normal case after
+        //      conf add), it just `dec_ref`s — when refcount reaches zero
+        //      (after step 1's queued op also dec'd), the registered handlers
+        //      fire: `port_on_destroy` invokes our `trampoline_on_destroy`
+        //      (which frees `raw_port` and the `PortContext`), and
+        //      `conf_port_on_destroy` releases the conf_port's child pool.
+        //      With no `grp_lock` (port was never added to a conference),
+        //      `pjmedia_port_destroy` invokes `on_destroy` directly.
+        //
+        // Critically, *we do not* `Box::from_raw(self.raw_port)` here — that
+        // was the bug: PJSIP still needs to read `port->grp_lock` from the
+        // queued op when the audio thread runs.
         if let Some(port) = self.conf_port.take() {
             unsafe { ffi::pjsua_conf_remove_port(port.0) };
         }
         if let Some(pool) = self.conf_pool.take() {
             unsafe { ffi::pj_pool_release(pool) };
         }
-        let impl_box = unsafe { &mut *self._impl_box };
-        impl_box.on_destroy();
-        let _ = unsafe { Box::from_raw(self._impl_box) };
-        let _ = unsafe { Box::from_raw(self.raw_port) };
+        unsafe { ffi::pjmedia_port_destroy(self.raw_port) };
     }
 }
 
@@ -173,8 +216,8 @@ unsafe extern "C" fn trampoline_get_frame(
     frame: *mut ffi::pjmedia_frame,
 ) -> i32 {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ptr = (*this_port).port_data.pdata as *mut Box<dyn MediaPort>;
-        let port_impl = &mut *impl_ptr;
+        let context = &mut *((*this_port).port_data.pdata as *mut PortContext);
+        let port_impl = &mut *context.impl_box;
         let buf = (*frame).buf as *mut i16;
         let sample_count = (*frame).size / 2;
         let samples = std::slice::from_raw_parts_mut(buf, sample_count);
@@ -207,8 +250,8 @@ unsafe extern "C" fn trampoline_put_frame(
     frame: *mut ffi::pjmedia_frame,
 ) -> i32 {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ptr = (*this_port).port_data.pdata as *mut Box<dyn MediaPort>;
-        let port_impl = &mut *impl_ptr;
+        let context = &mut *((*this_port).port_data.pdata as *mut PortContext);
+        let port_impl = &mut *context.impl_box;
         let buf = (*frame).buf as *mut i16;
         let size_bytes = (*frame).size;
         if buf.is_null() || size_bytes == 0 {
@@ -228,9 +271,33 @@ unsafe extern "C" fn trampoline_put_frame(
     result.unwrap_or(-1)
 }
 
-/// No-op: actual cleanup is done in `CustomPort::drop`, which removes the port
-/// from the conference bridge, calls `MediaPort::on_destroy`, and frees memory.
-unsafe extern "C" fn trampoline_on_destroy(_this_port: *mut ffi::pjmedia_port) -> i32 {
+/// PJSIP's port-destroy callback. Invoked when the port's `grp_lock` refcount
+/// reaches zero (via the `port_on_destroy` handler PJSIP registered during
+/// `pjmedia_port_init_grp_lock`), or directly from `pjmedia_port_destroy` when
+/// the port has no `grp_lock` (i.e., was never added to a conference).
+///
+/// This is the only place we free the `PortContext` and the `pjmedia_port`
+/// itself — by the time PJSIP calls us, no further trampoline callbacks or
+/// queued conf-bridge operations will touch them.
+unsafe extern "C" fn trampoline_on_destroy(this_port: *mut ffi::pjmedia_port) -> i32 {
+    if this_port.is_null() {
+        return 0;
+    }
+    let context_ptr = (*this_port).port_data.pdata as *mut PortContext;
+    if !context_ptr.is_null() {
+        // Deliberately scoped: drop `context` (which calls `impl_box.on_destroy`
+        // via `MediaPort::on_destroy` only if we explicitly invoke it; the
+        // `Drop` of `Box<dyn MediaPort>` does not).
+        let mut context = Box::from_raw(context_ptr);
+        // Catch unwind so a panic in user `on_destroy` doesn't propagate
+        // across the FFI boundary.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            context.impl_box.on_destroy();
+        }));
+        (*this_port).port_data.pdata = std::ptr::null_mut();
+        // `context` drops here, freeing `impl_box` and the `PjString` name.
+    }
+    let _ = Box::from_raw(this_port);
     0
 }
 
