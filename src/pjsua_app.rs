@@ -213,11 +213,24 @@ impl PjsuaApp {
 
         // --- logging config ---
         // Route PJSIP logs through the Rust tracing/log system via callback.
-        // Disable console output to avoid duplicate raw lines on stdout.
+        //
+        // PJSUA's `log_writer` (pjsua_core.c:752) only invokes `log_cfg.cb`
+        // when `level <= console_level`. The intuitive `console_level=0`
+        // (to suppress duplicate stdout output) silently disables the
+        // callback for every level — meaning no SIP messages or DNS
+        // failures or media setup logs ever surface in the journal.
+        //
+        // Setting `console_level == log_cfg.level` keeps the callback
+        // path armed for all levels we care about; the callback takes
+        // priority over `pj_log_write` (the default stdout sink), so
+        // there's no duplicate output. PJSIP's verbose SIP message dumps
+        // (level 4–5) flow through `log::debug!` / `log::trace!` with
+        // `target: "pjsip"`, which is exactly what we need to debug
+        // things like RingCentral's 183-with-port-0-SDP cancel path.
         let mut log_cfg: ffi::pjsua_logging_config = Default::default();
         unsafe { ffi::pjsua_logging_config_default(&mut log_cfg) };
         log_cfg.level = config.log_level;
-        log_cfg.console_level = 0;
+        log_cfg.console_level = config.log_level;
         log_cfg.cb = Some(pjsip_log_cb);
 
         // --- media config ---
