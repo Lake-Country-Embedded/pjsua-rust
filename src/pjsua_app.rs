@@ -1109,6 +1109,18 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
     acc_cfg.allow_via_rewrite = 0;
     acc_cfg.allow_sdp_nat_rewrite = 0;
 
+    // Disable PJSIP's automatic codec-lock re-INVITE/UPDATE. When the SDP
+    // answer carries more than one codec, PJSIP otherwise fires an UPDATE
+    // shortly after media activates to pin the call to a single codec.
+    // That UPDATE destroys and reallocates the call's conference slot,
+    // racing against any port (file player, tone generator) that was just
+    // connected by `session.conf_port`. The recycled slot then commonly
+    // gets reused by a pending "Connected" tonegen, leaving the file
+    // player bridged to the wrong port — silent on the wire. Real SIP
+    // peers don't switch codec mid-call, so locking offers no practical
+    // benefit and the extra round-trip is pure cost.
+    acc_cfg.lock_codec = 0;
+
     // Registration timeout
     if let Some(timeout) = config.reg_timeout {
         acc_cfg.reg_timeout = timeout;
