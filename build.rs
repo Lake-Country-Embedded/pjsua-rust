@@ -115,6 +115,7 @@ fn main() {
         .allowlist_function("pjsua_call_dial_dtmf")
         .allowlist_function("pjsua_call_send_dtmf")
         .allowlist_function("pjsua_call_send_dtmf_param_default")
+        .allowlist_function("pjsua_call_setting_default")
         // Media / Conference
         .allowlist_function("pjsua_conf_connect")
         .allowlist_function("pjsua_conf_disconnect")

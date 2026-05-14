@@ -403,6 +403,20 @@ async fn rc_setup_and_register(
     caller_cfg.transport_id = Some(tls_id.0);
     callee_cfg.transport_id = Some(tls_id.0);
 
+    // 100rel experiment notes (kept for reference, but left at the
+    // PJSIP default `NotUsed`):
+    //
+    // * `Optional` — pjsua's UAC code already always advertises
+    //   `Supported: 100rel`; this option only changes UAS behavior.
+    //   Verified: RC ignores the `Supported` header and still sends
+    //   unreliable `183 ... m=audio 0 a=inactive`.
+    // * `Mandatory` — adds `Require: 100rel`. Verified: RC responds
+    //   `500 Internal Server Error`. They don't speak PRACK.
+    //
+    // Conclusion: 100rel is not the lever. The actual workaround for
+    // the unreliable-18x-with-inactive-SDP path lives elsewhere — see
+    // `test_ringcentral_outbound_sip_trace` for the bug repro.
+
     let caller_id = app.add_account(&caller_cfg).expect("add caller");
     let callee_id = app.add_account(&callee_cfg).expect("add callee");
 

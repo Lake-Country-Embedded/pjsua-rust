@@ -138,6 +138,56 @@ impl fmt::Display for SrtpMode {
     }
 }
 
+/// Mirrors PJSIP's `pjsua_100rel_use` enum.
+///
+/// Controls the use of the 100rel / PRACK extension (RFC 3262) on this
+/// account. Some SBCs (notably RingCentral) send a placeholder
+/// unreliable `183 Session Progress` with `m=audio 0 a=inactive` SDP when
+/// the call is in early-dialog routing — and PJSUA auto-cancels because
+/// SDP negotiation produces zero active streams. Asking for
+/// `Optional` advertises `Supported: 100rel` in the outbound INVITE,
+/// which can prompt those SBCs to switch to reliable provisional
+/// responses with proper SDP and avoid the auto-cancel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Use100Rel {
+    /// PJSIP default. UAC still advertises `Supported: 100rel`; UAS
+    /// will not actively use it.
+    #[default]
+    NotUsed,
+    /// As UAC, require the peer to use 100rel. As UAS, only accept
+    /// peers that advertise 100rel support.
+    Mandatory,
+    /// As UAC, advertise `Supported: 100rel` and allow the peer to
+    /// opt in. As UAS, use 100rel for any 18x response.
+    Optional,
+}
+
+impl Use100Rel {
+    /// PJSIP C enum value.
+    pub fn to_pjsip(self) -> u32 {
+        match self {
+            Use100Rel::NotUsed => 0,
+            Use100Rel::Mandatory => 1,
+            Use100Rel::Optional => 2,
+        }
+    }
+}
+
+/// Per-call options that don't belong on the account.
+///
+/// Passed to [`PjsuaApp::make_call_with_setting`](crate::PjsuaApp::make_call_with_setting).
+/// Defaults are equivalent to plain
+/// [`PjsuaApp::make_call`](crate::PjsuaApp::make_call).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CallSetting {
+    /// Send the INVITE without an SDP body. The peer responds with a
+    /// 200 OK that contains the SDP offer; we answer in ACK. Useful
+    /// when the peer's early-dialog SDP behavior trips PJSUA's
+    /// auto-cancel path (RingCentral's unreliable 183 with
+    /// `m=audio 0 a=inactive`).
+    pub late_offer: bool,
+}
+
 /// DTMF sending method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DtmfMethod {
@@ -419,6 +469,29 @@ pub struct AccountConfig {
     /// transport has not yet been matched to the URI scheme.  Set to `None` to keep
     /// the default (`PJSUA_INVALID_ID = -1`) and let PJSIP auto-resolve.
     pub transport_id: Option<i32>,
+    /// 100rel (PRACK) usage for this account. `None` keeps PJSIP's
+    /// `pjsua_acc_config_default()` value (`PJSUA_100REL_NOT_USED`).
+    /// Set to `Some(Use100Rel::Optional)` to advertise
+    /// `Supported: 100rel` in outbound INVITEs — useful when the peer
+    /// (e.g. RingCentral) sends an unreliable provisional 18x with
+    /// inactive SDP and PJSUA's negotiator otherwise auto-cancels.
+    pub require_100rel: Option<Use100Rel>,
+    /// SRTP secure-signalling requirement.
+    ///
+    /// Pass-through to `pjsua_acc_config.srtp_secure_signaling`:
+    /// * `0` — SRTP allowed over any transport.
+    /// * `1` — SRTP only when signalling is TLS or `sips:` (PJSIP default).
+    /// * `2` — SRTP only when end-to-end secure (`sips:`).
+    ///
+    /// `None` keeps PJSIP's default (1). Set to `Some(0)` for accounts
+    /// where `use_srtp` is set but PJSIP's `get_secure_level` doesn't
+    /// recognise the signalling path as secure — for example, an
+    /// account using TLS transport together with an outbound-proxy URI
+    /// of the form `sip:host:port;transport=tls`. Without it, PJSIP
+    /// silently skips SRTP setup and the outbound INVITE goes out as
+    /// plain `RTP/AVP`, which an SRTP-only peer rejects with
+    /// `m=audio 0 a=inactive` in its 18x/200 OK SDP.
+    pub srtp_secure_signaling: Option<u32>,
 }
 
 impl Default for AccountConfig {
@@ -443,6 +516,8 @@ impl Default for AccountConfig {
             rtp_port_start: None,
             rtp_port_range: None,
             transport_id: None,
+            require_100rel: None,
+            srtp_secure_signaling: None,
         }
     }
 }

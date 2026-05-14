@@ -74,6 +74,7 @@ fn test_account_add_cycle() {
             rtp_port_start: None,
             rtp_port_range: None,
             transport_id: None,
+            require_100rel: None,
         };
 
         let acc_id = app

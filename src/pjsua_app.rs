@@ -588,6 +588,47 @@ impl PjsuaApp {
         Ok(CallId(call_id))
     }
 
+    /// Place an outgoing call with a custom [`CallSetting`].
+    ///
+    /// Useful for one-off behavior tweaks that don't belong on
+    /// [`AccountConfig`] — e.g. `late_offer = true` to send the INVITE
+    /// without an SDP body and answer in ACK after the peer offers in
+    /// the 200 OK. Helpful when the peer's early SDP behavior trips
+    /// PJSUA's auto-cancel path (RingCentral's unreliable 183 with
+    /// `m=audio 0 a=inactive`).
+    pub fn make_call_with_setting(
+        &self,
+        account: AccountId,
+        uri: &str,
+        setting: &CallSetting,
+    ) -> Result<CallId> {
+        let dst = PjString::new(uri);
+        let pj_dst = dst.as_pj_str();
+        let mut opt: ffi::pjsua_call_setting = Default::default();
+        unsafe { ffi::pjsua_call_setting_default(&mut opt) };
+        if setting.late_offer {
+            // PJSUA_CALL_NO_SDP_OFFER = 8 (per pjsua.h pjsua_call_flag).
+            opt.flag |= 8;
+        }
+        let mut call_id: ffi::pjsua_call_id = -1;
+        let status = unsafe {
+            ffi::pjsua_call_make_call(
+                account.0,
+                &pj_dst,
+                &opt,
+                ptr::null_mut(),
+                ptr::null(),
+                &mut call_id,
+            )
+        };
+        check_status(status)?;
+        debug!(
+            "call made (late_offer={}): call_id={call_id} uri={uri}",
+            setting.late_offer
+        );
+        Ok(CallId(call_id))
+    }
+
     /// Answer an incoming call with the given SIP status code (e.g. 200).
     pub fn answer_call(&self, call: CallId, code: u32) -> Result<()> {
         let status = unsafe { ffi::pjsua_call_answer(call.0, code, ptr::null(), ptr::null()) };
@@ -1097,6 +1138,17 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
 
     // SRTP
     acc_cfg.use_srtp = config.srtp.to_pjsip();
+    // SRTP secure-signaling requirement (0 = any transport, 1 = TLS or
+    // sips:, 2 = sips: end-to-end). PJSIP's default is 1, but its
+    // `get_secure_level` doesn't always recognise an outbound-proxy
+    // TLS hop as secure-level 1 — accounts using TLS transport with an
+    // outbound proxy URI like `sip:host:port;transport=tls` need to
+    // lower this to 0. Otherwise PJSIP silently skips SRTP setup and
+    // the offer goes out as plain RTP/AVP, which an SRTP-only peer
+    // rejects with `m=audio 0 a=inactive` in its 18x/200 OK SDP.
+    if let Some(level) = config.srtp_secure_signaling {
+        acc_cfg.srtp_secure_signaling = level as i32;
+    }
 
     // Disable PJSIP's NAT header/SDP rewriting. These flags cause PJSIP to
     // learn a "public" address from the registrar's Via received=/rport and
@@ -1162,6 +1214,16 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
     // failures for TLS where EUNSUPTRANSPORT can occur).
     if let Some(tp_id) = config.transport_id {
         acc_cfg.transport_id = tp_id;
+    }
+
+    // 100rel (PRACK) usage. Default leaves PJSIP's
+    // `pjsua_acc_config_default()` setting (NOT_USED) untouched. Setting
+    // `Optional` advertises `Supported: 100rel` in outbound INVITEs;
+    // some SBCs (RingCentral) then send reliable provisional responses
+    // with proper SDP, avoiding PJSUA's auto-cancel on the unreliable
+    // `183 ... m=audio 0 a=inactive` they would otherwise emit.
+    if let Some(rel) = config.require_100rel {
+        acc_cfg.require_100rel = rel.to_pjsip();
     }
 
     strings

@@ -110,6 +110,8 @@ impl TomlAccountConfig {
             rtp_port_start: None,
             rtp_port_range: None,
             transport_id: None,
+            require_100rel: None,
+            srtp_secure_signaling: None,
         }
     }
 }
