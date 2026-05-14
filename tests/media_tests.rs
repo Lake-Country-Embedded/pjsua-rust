@@ -7,6 +7,8 @@ fn init_app() -> (PjsuaApp, tokio::sync::mpsc::UnboundedReceiver<SipEvent>) {
         log_level: 0,
         clock_rate: 16000,
         null_audio: true,
+        user_agent: None,
+        nameservers: Vec::new(),
     };
     PjsuaApp::new(config).expect("Failed to init PJSUA")
 }

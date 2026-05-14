@@ -17,6 +17,8 @@ fn default_config() -> PjsuaConfig {
         log_level: 0, // suppress PJSIP output during stress tests
         clock_rate: 16000,
         null_audio: true,
+        user_agent: None,
+        nameservers: Vec::new(),
     }
 }
 
@@ -71,6 +73,7 @@ fn test_account_add_cycle() {
             reg_retry_interval: None,
             rtp_port_start: None,
             rtp_port_range: None,
+            transport_id: None,
         };
 
         let acc_id = app

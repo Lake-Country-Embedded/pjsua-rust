@@ -26,3 +26,7 @@ pkg-config = "0.3"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# RingCentral integration tests read the monorepo's
+# `testing/config/environment.json` directly. The crate doesn't pull
+# JSON into its main dep set; this stays test-only.
+serde_json = "1"
