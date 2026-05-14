@@ -639,6 +639,7 @@ impl PjsuaApp {
             total_duration_ms: (info.total_duration.sec as u64) * 1000
                 + (info.total_duration.msec as u64),
             last_status_code: info.last_status,
+            sip_call_id: pj_str_to_string(&info.call_id),
         })
     }
 

@@ -256,6 +256,11 @@ pub struct CallInfo {
     pub connect_duration_ms: u64,
     pub total_duration_ms: u64,
     pub last_status_code: u32,
+    /// SIP `Call-ID` header value for this call. Stable for the lifetime of
+    /// the dialog and unique per call. Useful for correlating
+    /// [`SipEvent::SipMessageTrace`] events (which only carry the SIP
+    /// `Call-ID`, not the PJSUA `call_id`) with this call.
+    pub sip_call_id: String,
 }
 
 /// High-level account information.
