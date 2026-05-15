@@ -138,6 +138,50 @@ impl fmt::Display for SrtpMode {
     }
 }
 
+/// Minimum signalling-security level required before SRTP is offered.
+///
+/// Maps to `pjsua_acc_config.srtp_secure_signaling` (0/1/2). PJSIP
+/// computes a "security level" for the signalling path inside
+/// `pjsua_call.c::get_secure_level()` and only offers/accepts SRTP when
+/// the computed level is at least the configured minimum. Some
+/// outbound-proxy + TLS combinations are not recognised as TLS by that
+/// computation even when the wire is TLS-encrypted; with `TlsOrSips`
+/// (PJSIP default) such accounts silently fall back to plain RTP/AVP.
+/// Lower to `Any` to disable the gating check; signalling is still
+/// TLS-encrypted because the transport itself is TLS.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SrtpSecureSignaling {
+    /// Accept SRTP regardless of signalling transport.
+    Any,
+    /// Require TLS or `sips:` signalling (PJSIP default).
+    #[default]
+    TlsOrSips,
+    /// Require end-to-end `sips:` signalling.
+    EndToEndSips,
+}
+
+impl SrtpSecureSignaling {
+    /// Numeric value passed to `pjsua_acc_config.srtp_secure_signaling`.
+    pub fn to_pjsip(self) -> u32 {
+        match self {
+            SrtpSecureSignaling::Any => 0,
+            SrtpSecureSignaling::TlsOrSips => 1,
+            SrtpSecureSignaling::EndToEndSips => 2,
+        }
+    }
+}
+
+impl fmt::Display for SrtpSecureSignaling {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SrtpSecureSignaling::Any => write!(f, "any"),
+            SrtpSecureSignaling::TlsOrSips => write!(f, "tls_or_sips"),
+            SrtpSecureSignaling::EndToEndSips => write!(f, "end_to_end_sips"),
+        }
+    }
+}
+
 /// Mirrors PJSIP's `pjsua_100rel_use` enum.
 ///
 /// Controls the use of the 100rel / PRACK extension (RFC 3262) on this
@@ -476,22 +520,18 @@ pub struct AccountConfig {
     /// (e.g. RingCentral) sends an unreliable provisional 18x with
     /// inactive SDP and PJSUA's negotiator otherwise auto-cancels.
     pub require_100rel: Option<Use100Rel>,
-    /// SRTP secure-signalling requirement.
+    /// SRTP secure-signalling requirement (pass-through to
+    /// `pjsua_acc_config.srtp_secure_signaling`).
     ///
-    /// Pass-through to `pjsua_acc_config.srtp_secure_signaling`:
-    /// * `0` — SRTP allowed over any transport.
-    /// * `1` — SRTP only when signalling is TLS or `sips:` (PJSIP default).
-    /// * `2` — SRTP only when end-to-end secure (`sips:`).
-    ///
-    /// `None` keeps PJSIP's default (1). Set to `Some(0)` for accounts
-    /// where `use_srtp` is set but PJSIP's `get_secure_level` doesn't
-    /// recognise the signalling path as secure — for example, an
-    /// account using TLS transport together with an outbound-proxy URI
-    /// of the form `sip:host:port;transport=tls`. Without it, PJSIP
-    /// silently skips SRTP setup and the outbound INVITE goes out as
-    /// plain `RTP/AVP`, which an SRTP-only peer rejects with
-    /// `m=audio 0 a=inactive` in its 18x/200 OK SDP.
-    pub srtp_secure_signaling: Option<u32>,
+    /// `None` keeps PJSIP's default (`TlsOrSips`). Set to
+    /// `Some(SrtpSecureSignaling::Any)` for accounts where `use_srtp`
+    /// is set but PJSIP's `get_secure_level` doesn't recognise the
+    /// signalling path as secure (e.g. TLS transport plus an
+    /// outbound-proxy URI of the form `sip:host:port;transport=tls`).
+    /// Without it, PJSIP silently skips SRTP setup and the outbound
+    /// INVITE goes out as plain `RTP/AVP`, which an SRTP-only peer
+    /// rejects with `m=audio 0 a=inactive` in its 18x/200 OK SDP.
+    pub srtp_secure_signaling: Option<SrtpSecureSignaling>,
 }
 
 impl Default for AccountConfig {

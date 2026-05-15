@@ -1138,16 +1138,15 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
 
     // SRTP
     acc_cfg.use_srtp = config.srtp.to_pjsip();
-    // SRTP secure-signaling requirement (0 = any transport, 1 = TLS or
-    // sips:, 2 = sips: end-to-end). PJSIP's default is 1, but its
-    // `get_secure_level` doesn't always recognise an outbound-proxy
-    // TLS hop as secure-level 1 — accounts using TLS transport with an
-    // outbound proxy URI like `sip:host:port;transport=tls` need to
-    // lower this to 0. Otherwise PJSIP silently skips SRTP setup and
-    // the offer goes out as plain RTP/AVP, which an SRTP-only peer
-    // rejects with `m=audio 0 a=inactive` in its 18x/200 OK SDP.
+    // SRTP secure-signaling requirement. PJSIP's default is `TlsOrSips`,
+    // but its `get_secure_level` doesn't always recognise an outbound-proxy
+    // TLS hop as secure; accounts using TLS transport with an outbound
+    // proxy URI like `sip:host:port;transport=tls` need `Any`. Otherwise
+    // PJSIP silently skips SRTP setup and the offer goes out as plain
+    // RTP/AVP, which an SRTP-only peer rejects with `m=audio 0 a=inactive`
+    // in its 18x/200 OK SDP.
     if let Some(level) = config.srtp_secure_signaling {
-        acc_cfg.srtp_secure_signaling = level as i32;
+        acc_cfg.srtp_secure_signaling = level.to_pjsip() as i32;
     }
 
     // Disable PJSIP's NAT header/SDP rewriting. These flags cause PJSIP to
