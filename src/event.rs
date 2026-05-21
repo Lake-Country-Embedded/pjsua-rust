@@ -10,12 +10,23 @@ use tokio::sync::mpsc;
 use tracing::{error, trace};
 
 use crate::ffi;
-use crate::ffi_helpers::pj_str_to_string;
-use crate::types::{AccountId, CallId, CallState, ConfPort, MediaStatus, SipMessageInfo, TraceDirection};
+use crate::ffi_helpers::{pj_str_to_string, pj_strerror_to_string};
+use crate::types::{
+    AccountId, CallId, CallState, ConfPort, MediaStatus, SipMessageInfo, TraceDirection,
+};
 
 // ---------------------------------------------------------------------------
 // SipEvent enum
 // ---------------------------------------------------------------------------
+
+/// A `pj_status_t` plus its `pj_strerror` text. Distinct from the
+/// crate-root `crate::error::PjError` enum (the `Result` error type) —
+/// downstream consumers import this as `pjsua_rust::event::PjError`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PjError {
+    pub code: u32,
+    pub text: String,
+}
 
 /// A high-level SIP event produced by the PJSUA callback bridge.
 #[derive(Debug, Clone)]
@@ -26,6 +37,11 @@ pub enum SipEvent {
         code: u16,
         reason: String,
         is_registered: bool,
+        /// `pjsua_acc_info.reg_last_err` rendered via `pj_strerror`. `None`
+        /// when the registration succeeded or no transport-level error was
+        /// recorded. The SIP `code` may still indicate failure when this is
+        /// `None` (e.g. a real 4xx/5xx from the server).
+        reg_last_error: Option<PjError>,
     },
     /// An incoming call has arrived.
     IncomingCall {
@@ -108,24 +124,63 @@ fn send_event(event: SipEvent) {
 // C callback functions
 // ---------------------------------------------------------------------------
 
-/// `on_reg_state` callback — registration state changed.
-pub(crate) unsafe extern "C" fn on_reg_state(acc_id: ffi::pjsua_acc_id) {
-    let mut info: ffi::pjsua_acc_info = Default::default();
-    let status = unsafe { ffi::pjsua_acc_get_info(acc_id, &mut info) };
+/// Registration state changed. Uses `on_reg_state2` (not `on_reg_state`)
+/// because `cbparam.reason` is the only PJSIP-exposed path to transport-
+/// error text — `pjsua_acc_info.status_text` is hard-wired to the canonical
+/// SIP reason phrase, and `acc->reg_last_err` stays 0 for transport
+/// failures (regc reports `param->status = PJ_SUCCESS`; the underlying
+/// tsx/transport error lives only in `tsx->status_text`).
+pub(crate) unsafe extern "C" fn on_reg_state2(
+    acc_id: ffi::pjsua_acc_id,
+    info: *mut ffi::pjsua_reg_info,
+) {
+    let mut acc_info: ffi::pjsua_acc_info = Default::default();
+    let status = unsafe { ffi::pjsua_acc_get_info(acc_id, &mut acc_info) };
     if status != 0 {
         error!("pjsua_acc_get_info failed: {status}");
         return;
     }
 
-    let code = info.status as u16;
-    let reason = pj_str_to_string(&info.status_text);
+    let code = acc_info.status as u16;
+    let reason = pj_str_to_string(&acc_info.status_text);
     let is_registered = (200..300).contains(&code);
+
+    // First try acc_info.reg_last_err (set when regc itself reports a
+    // pj_status_t failure — auth retry exhaustion, 423 re-send failure, etc).
+    let reg_last_err = acc_info.reg_last_err;
+    let mut reg_last_error = if reg_last_err != 0 {
+        Some(PjError {
+            code: reg_last_err as u32,
+            text: pj_strerror_to_string(reg_last_err),
+        })
+    } else {
+        None
+    };
+
+    // For transport-level failures (TLS verify, ECONNREFUSED, etc.),
+    // `acc->reg_last_err` is 0 (PJSIP reports transport errors via
+    // tsx->status_text, not via the regc status field). The actual text is
+    // in `cbparam.reason`. When that differs from the canonical SIP reason
+    // phrase, it's a transport-layer error worth surfacing.
+    if reg_last_error.is_none() && !is_registered && !info.is_null() {
+        let cbparam = unsafe { (*info).cbparam };
+        if !cbparam.is_null() {
+            let cb_reason = pj_str_to_string(unsafe { &(*cbparam).reason });
+            if !cb_reason.is_empty() && cb_reason != reason {
+                reg_last_error = Some(PjError {
+                    code: 0,
+                    text: cb_reason,
+                });
+            }
+        }
+    }
 
     send_event(SipEvent::RegistrationState {
         account_id: AccountId(acc_id),
         code,
         reason,
         is_registered,
+        reg_last_error,
     });
 }
 
@@ -309,9 +364,8 @@ pub extern "C" fn rust_sip_trace_on_msg(
     let sdp = if sdp_body.is_null() || sdp_body_len <= 0 {
         None
     } else {
-        let slice = unsafe {
-            std::slice::from_raw_parts(sdp_body as *const u8, sdp_body_len as usize)
-        };
+        let slice =
+            unsafe { std::slice::from_raw_parts(sdp_body as *const u8, sdp_body_len as usize) };
         Some(String::from_utf8_lossy(slice).to_string())
     };
 
@@ -349,6 +403,7 @@ mod tests {
             code: 200,
             reason: "OK".into(),
             is_registered: true,
+            reg_last_error: None,
         };
         let debug = format!("{:?}", event);
         assert!(debug.contains("RegistrationState"));
@@ -420,5 +475,33 @@ mod tests {
         assert!(debug.contains("TransferStatus"));
         assert!(debug.contains("200"));
         assert!(debug.contains("true"));
+    }
+
+    #[test]
+    fn pj_error_debug_clone() {
+        let err = PjError {
+            code: 171173,
+            text: "SSL certificate verification error (PJSIP_TLS_ECERTVERIF)".into(),
+        };
+        let cloned = err.clone();
+        assert_eq!(format!("{:?}", err), format!("{:?}", cloned));
+        assert!(format!("{:?}", err).contains("171173"));
+    }
+
+    #[test]
+    fn registration_state_carries_reg_last_error() {
+        let event = SipEvent::RegistrationState {
+            account_id: AccountId(0),
+            code: 503,
+            reason: "Service Unavailable".into(),
+            is_registered: false,
+            reg_last_error: Some(PjError {
+                code: 171173,
+                text: "SSL certificate verification error (PJSIP_TLS_ECERTVERIF)".into(),
+            }),
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("171173"));
+        assert!(debug.contains("RegistrationState"));
     }
 }

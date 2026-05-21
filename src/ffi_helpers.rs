@@ -62,6 +62,26 @@ pub fn pj_str_to_string(pj_str: &ffi::pj_str_t) -> String {
     String::from_utf8_lossy(slice).to_string()
 }
 
+/// Format a `pj_status_t` error code into a human-readable string via `pj_strerror`.
+///
+/// Returns an empty string when `status == 0`. Uses a fixed `PJ_ERR_MSG_SIZE`
+/// (256-byte) stack buffer per PJ documentation.
+pub fn pj_strerror_to_string(status: ffi::pj_status_t) -> String {
+    if status == 0 {
+        return String::new();
+    }
+    const BUF_LEN: usize = 256;
+    let mut buf = [0u8; BUF_LEN];
+    let pj_str = unsafe {
+        ffi::pj_strerror(
+            status,
+            buf.as_mut_ptr() as *mut std::os::raw::c_char,
+            BUF_LEN,
+        )
+    };
+    pj_str_to_string(&pj_str)
+}
+
 // The following extraction helpers are not currently used (the C trace module
 // handles message extraction directly), but are retained for potential future use.
 #[allow(dead_code)]
@@ -104,17 +124,16 @@ pub unsafe fn extract_sip_msg_info(
     }
     let msg_ref = unsafe { &*msg };
 
-    let method_or_status =
-        if msg_ref.type_ == ffi::pjsip_msg_type_e_PJSIP_REQUEST_MSG {
-            // SAFETY: union variant is valid when type_ == REQUEST
-            let req = unsafe { &msg_ref.line.req };
-            pj_str_to_string(&req.method.name)
-        } else {
-            // SAFETY: union variant is valid when type_ == RESPONSE
-            let status = unsafe { &msg_ref.line.status };
-            let reason = pj_str_to_string(&status.reason);
-            format!("{} {}", status.code, reason)
-        };
+    let method_or_status = if msg_ref.type_ == ffi::pjsip_msg_type_e_PJSIP_REQUEST_MSG {
+        // SAFETY: union variant is valid when type_ == REQUEST
+        let req = unsafe { &msg_ref.line.req };
+        pj_str_to_string(&req.method.name)
+    } else {
+        // SAFETY: union variant is valid when type_ == RESPONSE
+        let status = unsafe { &msg_ref.line.status };
+        let reason = pj_str_to_string(&status.reason);
+        format!("{} {}", status.code, reason)
+    };
 
     let sdp = unsafe { extract_sdp_body(msg_ref.body) };
 
@@ -132,9 +151,7 @@ pub unsafe fn extract_sip_msg_info(
 ///
 /// Fills `sip_call_id` from the pre-parsed `cid` header and adds a `CSeq`
 /// entry to `headers` from the pre-parsed `cseq` header.
-pub unsafe fn extract_from_rx_data(
-    rdata: *const ffi::pjsip_rx_data,
-) -> Option<SipMessageInfo> {
+pub unsafe fn extract_from_rx_data(rdata: *const ffi::pjsip_rx_data) -> Option<SipMessageInfo> {
     if rdata.is_null() {
         return None;
     }
@@ -169,9 +186,7 @@ pub unsafe fn extract_from_rx_data(
 /// return `None`.  Within a TSX state event the source union is consulted:
 /// - `PJSIP_EVENT_RX_MSG` → delegates to [`extract_from_rx_data`]
 /// - `PJSIP_EVENT_TX_MSG` → delegates to [`extract_sip_msg_info`] on the tdata message
-pub unsafe fn extract_from_event(
-    event: *const ffi::pjsip_event,
-) -> Option<SipMessageInfo> {
+pub unsafe fn extract_from_event(event: *const ffi::pjsip_event) -> Option<SipMessageInfo> {
     if event.is_null() {
         return None;
     }

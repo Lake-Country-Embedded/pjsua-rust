@@ -147,7 +147,9 @@ impl PjsuaApp {
         unsafe { ffi::pjsua_config_default(&mut ua_cfg) };
 
         // Install callbacks.
-        ua_cfg.cb.on_reg_state = Some(event::on_reg_state);
+        // Use on_reg_state2 (not on_reg_state) so we can read cbparam.reason
+        // for transport-level error text (TLS verify, ECONNREFUSED, ...).
+        ua_cfg.cb.on_reg_state2 = Some(event::on_reg_state2);
         ua_cfg.cb.on_incoming_call = Some(event::on_incoming_call);
         ua_cfg.cb.on_call_state = Some(event::on_call_state);
         ua_cfg.cb.on_call_media_state = Some(event::on_call_media_state);
@@ -156,10 +158,7 @@ impl PjsuaApp {
 
         // Optional User-Agent header. Must outlive the `pjsua_init` call below;
         // PJSIP copies the string into its own pool during init.
-        let user_agent_holder = config
-            .user_agent
-            .as_ref()
-            .map(|s| PjString::new(s));
+        let user_agent_holder = config.user_agent.as_ref().map(|s| PjString::new(s));
         if let Some(ua) = user_agent_holder.as_ref() {
             ua_cfg.user_agent = ua.as_pj_str();
         }
@@ -179,11 +178,8 @@ impl PjsuaApp {
         // outlive the `pjsua_init` call because PJSIP copies the
         // strings into its own pool during init.
         const MAX_NAMESERVERS: usize = 4;
-        let nameservers_to_use: Vec<&String> = config
-            .nameservers
-            .iter()
-            .take(MAX_NAMESERVERS)
-            .collect();
+        let nameservers_to_use: Vec<&String> =
+            config.nameservers.iter().take(MAX_NAMESERVERS).collect();
         if config.nameservers.len() > MAX_NAMESERVERS {
             log::warn!(
                 "pjsua: {} nameserver(s) provided, truncating to first {}",
@@ -206,9 +202,7 @@ impl PjsuaApp {
                 nameservers_to_use
             );
         } else {
-            debug!(
-                "pjsua: no nameservers configured — falling back to synchronous getaddrinfo"
-            );
+            debug!("pjsua: no nameservers configured — falling back to synchronous getaddrinfo");
         }
 
         // --- logging config ---
@@ -463,9 +457,7 @@ impl PjsuaApp {
     pub fn set_transport_published_address(&self, id: TransportId, addr: &str) -> Result<()> {
         let c_addr = std::ffi::CString::new(addr)
             .map_err(|_| crate::error::PjError::InvalidArg("invalid address string".into()))?;
-        let status = unsafe {
-            ffi::pjsua_transport_set_published_address(id.0, c_addr.as_ptr())
-        };
+        let status = unsafe { ffi::pjsua_transport_set_published_address(id.0, c_addr.as_ptr()) };
         check_status(status)?;
         info!("transport {} published address set to {addr}", id.0);
         Ok(())
@@ -536,7 +528,10 @@ impl PjsuaApp {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 let status = unsafe { ffi::pjsua_acc_del(id.0) };
                 if status != 0 {
-                    warn!("account {} removal failed after retries (status={})", id.0, status);
+                    warn!(
+                        "account {} removal failed after retries (status={})",
+                        id.0, status
+                    );
                 }
             } else if status != 0 {
                 check_status(status)?;
@@ -925,11 +920,7 @@ impl PjsuaApp {
         let user_data_ptr = Box::into_raw(user_data) as *mut std::ffi::c_void;
 
         unsafe {
-            ffi::pjmedia_wav_player_set_eof_cb2(
-                port,
-                user_data_ptr,
-                Some(player_eof_trampoline),
-            );
+            ffi::pjmedia_wav_player_set_eof_cb2(port, user_data_ptr, Some(player_eof_trampoline));
         }
         debug!("EOF callback registered for player {}", id.0);
         Ok(())
@@ -1045,11 +1036,9 @@ impl PjsuaApp {
     /// ignores mismatches.
     pub fn enum_codecs(&self) -> Result<Vec<(String, u8)>> {
         const MAX_CODECS: usize = 32;
-        let mut infos: [ffi::pjsua_codec_info; MAX_CODECS] =
-            unsafe { std::mem::zeroed() };
+        let mut infos: [ffi::pjsua_codec_info; MAX_CODECS] = unsafe { std::mem::zeroed() };
         let mut count = MAX_CODECS as std::os::raw::c_uint;
-        let status =
-            unsafe { ffi::pjsua_enum_codecs(infos.as_mut_ptr(), &mut count) };
+        let status = unsafe { ffi::pjsua_enum_codecs(infos.as_mut_ptr(), &mut count) };
         check_status(status)?;
 
         let mut out = Vec::with_capacity(count as usize);
@@ -1259,8 +1248,8 @@ pub fn register_thread(name: &str) -> Result<()> {
         let desc_ptr = Box::into_raw(desc);
         let mut thread_ptr: *mut ffi::pj_thread_t = ptr::null_mut();
 
-        let name_cstr =
-            std::ffi::CString::new(name).unwrap_or_else(|_| std::ffi::CString::new("rust").unwrap());
+        let name_cstr = std::ffi::CString::new(name)
+            .unwrap_or_else(|_| std::ffi::CString::new("rust").unwrap());
         let status = ffi::pj_thread_register(
             name_cstr.as_ptr(),
             (*desc_ptr).as_mut_ptr(),
