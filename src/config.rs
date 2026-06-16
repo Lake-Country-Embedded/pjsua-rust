@@ -104,6 +104,9 @@ impl TomlAccountConfig {
             realm: self.realm.clone(),
             reg_timeout: self.reg_timeout,
             use_sips: self.use_sips,
+            // TOML standalone config resolves to an explicit host:port; DNS SRV
+            // is a runtime concern and is left off here.
+            dns_srv: false,
             registrar: self.registrar.clone(),
             proxy: self.proxy.clone(),
             reg_retry_interval: None,

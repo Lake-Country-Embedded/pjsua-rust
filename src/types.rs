@@ -495,6 +495,12 @@ pub struct AccountConfig {
     pub reg_timeout: Option<u32>,
     /// Use `sips:` URI scheme instead of `sip:`.
     pub use_sips: bool,
+    /// Resolve the registrar via DNS SRV instead of a fixed `host:port`.
+    ///
+    /// When `true`, [`AccountConfig::registrar_uri`] omits the port so PJSIP does
+    /// an RFC 3263 NAPTR/SRV lookup (with A-record fallback). No effect when a
+    /// custom `registrar` is set or `server` already has an explicit port.
+    pub dns_srv: bool,
     /// Override the auto-built registrar URI.
     pub registrar: Option<String>,
     /// Outbound proxy URI.
@@ -550,6 +556,7 @@ impl Default for AccountConfig {
             realm: None,
             reg_timeout: None,
             use_sips: false,
+            dns_srv: false,
             registrar: None,
             proxy: None,
             reg_retry_interval: None,
@@ -596,13 +603,20 @@ impl AccountConfig {
     ///
     /// Returns the custom `registrar` if set, otherwise `sip:server:port`.
     /// Appends `;transport=tcp` or `;transport=tls` for non-UDP transports.
+    ///
+    /// When `dns_srv` is set, the port is omitted so PJSIP resolves via SRV; the
+    /// transport parameter is kept so the SRV service tag matches the transport.
     pub fn registrar_uri(&self) -> String {
         if let Some(ref reg) = self.registrar {
             return reg.clone();
         }
         let scheme = if self.use_sips { "sips" } else { "sip" };
         let tp = self.transport_param();
-        format!("{}:{}:{}{}", scheme, self.server, self.port, tp)
+        if self.dns_srv {
+            format!("{}:{}{}", scheme, self.server, tp)
+        } else {
+            format!("{}:{}:{}{}", scheme, self.server, self.port, tp)
+        }
     }
 }
 
@@ -671,6 +685,55 @@ mod tests {
         }
         let w: W = toml::from_str("s = \"disabled\"").unwrap();
         assert_eq!(w.s, SrtpMode::Disabled);
+    }
+
+    #[test]
+    fn registrar_uri_a_record_includes_port() {
+        // Default (dns_srv = false): explicit port is present, suppressing SRV.
+        let cfg = AccountConfig {
+            server: "sip.example.com".into(),
+            port: 5060,
+            ..Default::default()
+        };
+        assert_eq!(cfg.registrar_uri(), "sip:sip.example.com:5060");
+    }
+
+    #[test]
+    fn registrar_uri_srv_udp_omits_port() {
+        // UDP + SRV: bare host, no transport param, so PJSIP queries _sip._udp.
+        let cfg = AccountConfig {
+            server: "sip.example.com".into(),
+            port: 5060,
+            dns_srv: true,
+            ..Default::default()
+        };
+        assert_eq!(cfg.registrar_uri(), "sip:sip.example.com");
+    }
+
+    #[test]
+    fn registrar_uri_srv_tls_keeps_transport_omits_port() {
+        // TLS + SRV: transport param retained so the SRV service tag matches,
+        // but the explicit port is dropped so resolution goes via SRV.
+        let cfg = AccountConfig {
+            server: "sip.example.com".into(),
+            port: 5061,
+            transport: TransportType::Tls,
+            dns_srv: true,
+            ..Default::default()
+        };
+        assert_eq!(cfg.registrar_uri(), "sip:sip.example.com;transport=tls");
+    }
+
+    #[test]
+    fn registrar_uri_custom_registrar_ignores_dns_srv() {
+        // An explicit registrar override always wins, SRV flag notwithstanding.
+        let cfg = AccountConfig {
+            server: "sip.example.com".into(),
+            registrar: Some("sip:reg.example.com:5070".into()),
+            dns_srv: true,
+            ..Default::default()
+        };
+        assert_eq!(cfg.registrar_uri(), "sip:reg.example.com:5070");
     }
 
     #[test]

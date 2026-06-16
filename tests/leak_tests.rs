@@ -68,6 +68,7 @@ fn test_account_add_cycle() {
             realm: None,
             reg_timeout: None,
             use_sips: false,
+            dns_srv: false,
             registrar: None,
             proxy: None,
             reg_retry_interval: None,
