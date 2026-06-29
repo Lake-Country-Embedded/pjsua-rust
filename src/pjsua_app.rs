@@ -392,6 +392,10 @@ impl PjsuaApp {
 
         // Keep all PjStrings alive for the duration of the FFI call.
         let mut strings: Vec<PjString> = Vec::new();
+        // Backing storage for the optional cipher-preference list; PJSIP
+        // deep-copies it (`pjsip_tls_setting_copy`) so it only needs to
+        // outlive the `pjsua_transport_create` call below.
+        let mut ciphers: Vec<ffi::pj_ssl_cipher> = Vec::new();
 
         if let Some(addr) = bind_addr {
             let bind_str = PjString::new(addr);
@@ -427,6 +431,23 @@ impl PjsuaApp {
             }
             tp_cfg.tls_setting.verify_server = if tls_cfg.verify_server { 1 } else { 0 };
             tp_cfg.tls_setting.verify_client = if tls_cfg.verify_client { 1 } else { 0 };
+
+            if let Some(level) = tls_cfg.security_level {
+                // PJSIP's OpenSSL backend registers pseudo-cipher aliases in
+                // `ssl_ciphers[]` at library init: `DEFAULT` (0xFF000000) and
+                // `@SECLEVEL=N` (0xFF000001 + N, for N in 0..=5). Pushing them
+                // makes `set_cipher_list` build the OpenSSL cipher string
+                // "DEFAULT:@SECLEVEL=<level>". Lower levels (e.g. 1) permit the
+                // 1024-bit DH groups that level 2 (OpenSSL 3.x default) rejects
+                // with "dh key too small"; higher levels demand stronger keys.
+                const PJ_SSL_CIPHER_DEFAULT: ffi::pj_ssl_cipher = 0xFF00_0000u32 as ffi::pj_ssl_cipher;
+                let level = level.min(5);
+                let seclevel_cipher: ffi::pj_ssl_cipher = (0xFF00_0001u32 + level as u32) as ffi::pj_ssl_cipher;
+                ciphers.push(PJ_SSL_CIPHER_DEFAULT);
+                ciphers.push(seclevel_cipher);
+                tp_cfg.tls_setting.ciphers = ciphers.as_mut_ptr();
+                tp_cfg.tls_setting.ciphers_num = ciphers.len() as _;
+            }
         }
 
         let mut tp_id: ffi::pjsua_transport_id = -1;
@@ -498,6 +519,19 @@ impl PjsuaApp {
     /// stop automatic re-registration. Used during transport rebind to pause
     /// REGISTER traffic while transports are being swapped.
     pub fn set_registration(&self, id: AccountId, register: bool) -> Result<()> {
+        // Guard against a registration request racing an account delete. The
+        // pjsip worker drains SetRegistration commands off a queue and the
+        // retry tick can enqueue more, so an account may be removed
+        // (pjsua_acc_del) between a command being enqueued and run. PJSIP's
+        // pjsua_acc_set_registration opens with a hard `pj_assert(... .valid)`,
+        // and our release build keeps PJSIP asserts compiled in, so calling it
+        // for a since-deleted account aborts the whole daemon (SIGABRT) rather
+        // than returning an error. pjsua_acc_is_valid is the safe, non-asserting
+        // check; if the slot is gone there is nothing to (un)register.
+        if unsafe { ffi::pjsua_acc_is_valid(id.0) } == 0 {
+            debug!("set_registration: account {} no longer valid — skipping", id.0);
+            return Ok(());
+        }
         let renew: ffi::pj_bool_t = if register { 1 } else { 0 };
         let status = unsafe { ffi::pjsua_acc_set_registration(id.0, renew) };
         check_status(status)?;
@@ -507,6 +541,13 @@ impl PjsuaApp {
 
     /// Unregister and delete a SIP account.
     pub fn remove_account(&self, id: AccountId) -> Result<()> {
+        // Already gone (e.g. a double-remove or a slot reclaimed under churn).
+        // pjsua_acc_set_registration / pjsua_acc_del assert on an invalid slot,
+        // so bail out before touching PJSIP for a non-existent account.
+        if unsafe { ffi::pjsua_acc_is_valid(id.0) } == 0 {
+            debug!("remove_account: account {} already invalid — nothing to do", id.0);
+            return Ok(());
+        }
         // Best-effort unregister (fails for P2P accounts or mid-transaction).
         let status = unsafe { ffi::pjsua_acc_set_registration(id.0, 0) };
         if status != 0 {
@@ -567,12 +608,20 @@ impl PjsuaApp {
     pub fn make_call(&self, account: AccountId, uri: &str) -> Result<CallId> {
         let dst = PjString::new(uri);
         let pj_dst = dst.as_pj_str();
+        let mut opt: ffi::pjsua_call_setting = Default::default();
+        unsafe { ffi::pjsua_call_setting_default(&mut opt) };
+        // PJSIP 2.16's call-setting default enables one T.140 real-time-text
+        // stream (txt_cnt=1). That extra `m=text` line in the SDP offer makes
+        // many PSTN carrier SBCs (OnSIP, Nextiva, ...) reject the entire INVITE
+        // with `488 Not Acceptable Here` instead of just zeroing the m-line.
+        // These products don't use SIP real-time text, so never offer it.
+        opt.txt_cnt = 0;
         let mut call_id: ffi::pjsua_call_id = -1;
         let status = unsafe {
             ffi::pjsua_call_make_call(
                 account.0,
                 &pj_dst,
-                ptr::null(),
+                &opt,
                 ptr::null_mut(),
                 ptr::null(),
                 &mut call_id,
@@ -601,6 +650,10 @@ impl PjsuaApp {
         let pj_dst = dst.as_pj_str();
         let mut opt: ffi::pjsua_call_setting = Default::default();
         unsafe { ffi::pjsua_call_setting_default(&mut opt) };
+        // Suppress the T.140 real-time-text stream PJSIP 2.16 offers by
+        // default (see `make_call`); the stray `m=text` line trips PSTN SBCs
+        // into a 488 rejection.
+        opt.txt_cnt = 0;
         if setting.late_offer {
             // PJSUA_CALL_NO_SDP_OFFER = 8 (per pjsua.h pjsua_call_flag).
             opt.flag |= 8;

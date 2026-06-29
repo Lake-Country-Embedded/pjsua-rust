@@ -398,6 +398,12 @@ pub struct TlsConfig {
     pub verify_server: bool,
     /// Verify client certificate.
     pub verify_client: bool,
+    /// Explicit OpenSSL security level (0-5) to force on the TLS transport via
+    /// the cipher list `DEFAULT:@SECLEVEL=<n>`, or `None` to leave PJSIP's
+    /// default ciphers and OpenSSL's built-in security level in place. Level 1
+    /// accepts the weak (1024-bit) Diffie-Hellman parameters that level 2
+    /// rejects with "dh key too small".
+    pub security_level: Option<u8>,
 }
 
 /// Top-level PJSUA configuration.
