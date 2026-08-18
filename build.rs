@@ -2,6 +2,17 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // Cargo's default "rebuild if anything in the package changed" heuristic is
+    // DISABLED as soon as any cargo:rerun-if-changed is emitted — and
+    // bindgen's CargoCallbacks emits them for every header it parses. Without
+    // the two lines below, edits to these .c files are silently ignored and a
+    // stale object is relinked. That is not a cosmetic staleness: the C calls
+    // rust_sip_trace_on_msg(), so a signature change on one side and not the
+    // other produces an ABI mismatch that reads garbage arguments.
+    println!("cargo:rerun-if-changed=src/trace_module.c");
+    println!("cargo:rerun-if-changed=src/transport_helper.c");
+    println!("cargo:rerun-if-changed=wrapper.h");
+
     // Use pkg-config to find libpjproject and get include/link flags
     let lib = pkg_config::Config::new()
         .atleast_version("2.13")

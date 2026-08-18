@@ -30,6 +30,12 @@ static void extract_and_trace(pjsip_msg *msg, int is_outgoing)
     char mos_buf[128];
     int  mos_len;
 
+    /* Declared at function scope: `sdp_ptr` below is handed to
+     * rust_sip_trace_on_msg() after the block that fills it would have ended,
+     * so a block-scoped buffer would leave it dangling.
+     */
+    char sdp_buf[4096];
+
     if (msg->type == PJSIP_REQUEST_MSG) {
         pj_str_t *name = &msg->line.req.method.name;
         mos_len = (int)PJ_MIN(name->slen, (pj_ssize_t)(sizeof(mos_buf) - 1));
@@ -57,7 +63,6 @@ static void extract_and_trace(pjsip_msg *msg, int is_outgoing)
     const char *sdp_ptr = NULL;
     int         sdp_len = 0;
     if (msg->body && msg->body->print_body) {
-        char sdp_buf[4096];
         int n = msg->body->print_body(msg->body, sdp_buf, sizeof(sdp_buf));
         if (n > 0) {
             sdp_ptr = sdp_buf;

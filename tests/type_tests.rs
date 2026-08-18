@@ -34,6 +34,7 @@ fn test_sip_event_variants() {
             code: 200,
             reason: "OK".into(),
             is_registered: true,
+            reg_last_error: None,
         },
         SipEvent::IncomingCall {
             account_id: AccountId(0),
