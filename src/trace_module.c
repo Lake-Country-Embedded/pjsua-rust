@@ -19,8 +19,63 @@ extern void rust_sip_trace_on_msg(
     const char *sip_call_id,
     int         sip_call_id_len,
     const char *sdp_body,
-    int         sdp_body_len
+    int         sdp_body_len,
+    const char *headers,
+    int         headers_len
 );
+
+/* ---------- header allowlist ---------- */
+
+/* Headers carried into call traces. Deliberately a short allowlist: a full
+ * header dump would bloat every traced message, while these are the ones that
+ * explain *why* a request was answered the way it was. `Warning` is the
+ * important one — PJSIP attaches `Warning: 381 ... "SIPS Required"` to the 480
+ * it generates in pjsip_inv_verify_request() when a sips: Request-URI arrives
+ * with a non-secure Contact/Record-Route, and without it a rejection trace only
+ * shows a bare "480 Temporarily Unavailable".
+ */
+static const char *TRACED_HDR_NAMES[] = {
+    "Warning", "Reason", "To", "From", "Contact"
+};
+
+static int hdr_is_traced(const pj_str_t *name)
+{
+    unsigned i;
+    for (i = 0; i < PJ_ARRAY_SIZE(TRACED_HDR_NAMES); ++i) {
+        if (pj_stricmp2(name, TRACED_HDR_NAMES[i]) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Print the allowlisted headers into `buf` as newline-separated
+ * "Name: value" lines. Returns the number of bytes written (never includes a
+ * trailing NUL). A header that doesn't fit is skipped rather than truncated,
+ * so the Rust side never sees a half-parsed line.
+ */
+static int extract_headers(pjsip_msg *msg, char *buf, int buf_size)
+{
+    int used = 0;
+    pjsip_hdr *hdr;
+
+    for (hdr = msg->hdr.next; hdr != &msg->hdr; hdr = hdr->next) {
+        int n;
+
+        if (!hdr_is_traced(&hdr->name))
+            continue;
+        /* Leave room for the '\n' separator. */
+        if (used >= buf_size - 1)
+            break;
+
+        n = pjsip_hdr_print_on(hdr, buf + used, (pj_size_t)(buf_size - used - 1));
+        if (n <= 0)             /* -1 = doesn't fit; skip this header */
+            continue;
+        used += n;
+        buf[used++] = '\n';
+    }
+
+    return used;
+}
 
 /* ---------- helpers ---------- */
 
@@ -35,6 +90,8 @@ static void extract_and_trace(pjsip_msg *msg, int is_outgoing)
      * so a block-scoped buffer would leave it dangling.
      */
     char sdp_buf[4096];
+    char hdr_buf[1024];
+    int  hdr_len;
 
     if (msg->type == PJSIP_REQUEST_MSG) {
         pj_str_t *name = &msg->line.req.method.name;
@@ -70,10 +127,14 @@ static void extract_and_trace(pjsip_msg *msg, int is_outgoing)
         }
     }
 
+    /* Allowlisted diagnostic headers */
+    hdr_len = extract_headers(msg, hdr_buf, sizeof(hdr_buf));
+
     rust_sip_trace_on_msg(is_outgoing,
                           mos_buf, mos_len,
                           cid_ptr, cid_len,
-                          sdp_ptr, sdp_len);
+                          sdp_ptr, sdp_len,
+                          hdr_buf, hdr_len);
 }
 
 /* ---------- module callbacks ---------- */

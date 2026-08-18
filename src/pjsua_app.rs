@@ -155,6 +155,10 @@ impl PjsuaApp {
         ua_cfg.cb.on_call_media_state = Some(event::on_call_media_state);
         ua_cfg.cb.on_dtmf_digit2 = Some(event::on_dtmf_digit2);
         ua_cfg.cb.on_call_transfer_status = Some(event::on_call_transfer_status);
+        // Fires when PJSIP answers an inbound INVITE itself (screening failure,
+        // no free call slot, ...). Without it those rejections never surface —
+        // on_incoming_call is not called and no call slot exists to trace.
+        ua_cfg.cb.on_rejected_incoming_call = Some(event::on_rejected_incoming_call);
 
         // Optional User-Agent header. Must outlive the `pjsua_init` call below;
         // PJSIP copies the string into its own pool during init.

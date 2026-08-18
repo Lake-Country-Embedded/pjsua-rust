@@ -81,6 +81,34 @@ pub enum SipEvent {
         status_text: String,
         is_final: bool,
     },
+    /// An incoming call was rejected by PJSIP *before* it reached
+    /// [`SipEvent::IncomingCall`].
+    ///
+    /// PJSIP screens an inbound INVITE in `pjsip_inv_verify_request()` (called
+    /// from `pjsua_call_on_incoming()`) and can answer it outright — no call
+    /// slot is allocated and `on_incoming_call` never fires, so without this
+    /// event the rejection is invisible above the PJSIP log. The most common
+    /// cause in the field is a secure-dialog mismatch: a `sips:` Request-URI
+    /// whose Contact/Record-Route isn't secure, answered `480` with a
+    /// `Warning: 381 ... "SIPS Required"` header.
+    IncomingCallRejected {
+        /// PJSUA call slot, or `None` when no slot was available (PJSIP
+        /// reports `PJSUA_INVALID_ID` in that case).
+        call_id: Option<CallId>,
+        /// SIP status code the stack answered with (e.g. 480).
+        st_code: u16,
+        /// Reason phrase. Note this is the *canonical* text for `st_code`
+        /// (e.g. "Temporarily Unavailable"); the discriminating detail lives
+        /// in the `Warning` header of the response, which the trace module
+        /// captures separately.
+        st_text: String,
+        /// Local URI from the INVITE's To: header.
+        local_uri: String,
+        /// Remote URI from the INVITE's From: header.
+        remote_uri: String,
+        /// SIP Call-ID, used to correlate with buffered trace messages.
+        sip_call_id: String,
+    },
     /// A SIP message was sent or received for a call (for tracing).
     SipMessageTrace {
         call_id: CallId,
@@ -206,6 +234,49 @@ pub(crate) unsafe extern "C" fn on_incoming_call(
         call_id: CallId(call_id),
         remote_uri,
         local_uri,
+        sip_call_id,
+    });
+}
+
+/// `on_rejected_incoming_call` callback — PJSIP answered an inbound INVITE
+/// itself, before any call slot existed.
+///
+/// Fires from `pjsua_call_on_incoming()`'s `on_return` path for any non-1xx/2xx
+/// status, which includes the `pjsip_inv_verify_request2()` screening failures.
+/// `param.rdata` is the original INVITE and is used only to read its Call-ID.
+pub(crate) unsafe extern "C" fn on_rejected_incoming_call(
+    param: *const ffi::pjsua_on_rejected_incoming_call_param,
+) {
+    if param.is_null() {
+        return;
+    }
+    let param = unsafe { &*param };
+
+    // PJSUA_INVALID_ID (-1) means the INVITE was refused before a slot was
+    // taken — the usual case for a screening failure.
+    let call_id = if param.call_id >= 0 {
+        Some(CallId(param.call_id))
+    } else {
+        None
+    };
+
+    let sip_call_id = if param.rdata.is_null() {
+        String::new()
+    } else {
+        let cid = unsafe { (*param.rdata).msg_info.cid };
+        if cid.is_null() {
+            String::new()
+        } else {
+            pj_str_to_string(unsafe { &(*cid).id })
+        }
+    };
+
+    send_event(SipEvent::IncomingCallRejected {
+        call_id,
+        st_code: param.st_code as u16,
+        st_text: pj_str_to_string(&param.st_text),
+        local_uri: pj_str_to_string(&param.local_info),
+        remote_uri: pj_str_to_string(&param.remote_info),
         sip_call_id,
     });
 }
@@ -342,6 +413,8 @@ pub extern "C" fn rust_sip_trace_on_msg(
     sip_call_id_len: std::os::raw::c_int,
     sdp_body: *const std::os::raw::c_char,
     sdp_body_len: std::os::raw::c_int,
+    headers: *const std::os::raw::c_char,
+    headers_len: std::os::raw::c_int,
 ) {
     let mos = if method_or_status.is_null() || method_or_status_len <= 0 {
         String::new()
@@ -369,6 +442,14 @@ pub extern "C" fn rust_sip_trace_on_msg(
         Some(String::from_utf8_lossy(slice).to_string())
     };
 
+    let headers = if headers.is_null() || headers_len <= 0 {
+        HashMap::new()
+    } else {
+        let slice =
+            unsafe { std::slice::from_raw_parts(headers as *const u8, headers_len as usize) };
+        parse_trace_headers(&String::from_utf8_lossy(slice))
+    };
+
     let direction = if is_outgoing != 0 {
         TraceDirection::Sent
     } else {
@@ -383,9 +464,41 @@ pub extern "C" fn rust_sip_trace_on_msg(
             method_or_status: mos,
             sip_call_id: call_id_str,
             sdp,
-            headers: HashMap::new(),
+            headers,
         },
     });
+}
+
+/// Parse the newline-separated `Name: value` block produced by
+/// `extract_headers()` in `trace_module.c`.
+///
+/// Repeated headers (a message may carry several `Warning`s or `Contact`s) are
+/// joined with `", "` rather than overwriting, so a rejection trace keeps every
+/// warning the stack attached.
+fn parse_trace_headers(raw: &str) -> HashMap<String, String> {
+    let mut headers: HashMap<String, String> = HashMap::new();
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let value = value.trim();
+        headers
+            .entry(name.to_string())
+            .and_modify(|existing| {
+                existing.push_str(", ");
+                existing.push_str(value);
+            })
+            .or_insert_with(|| value.to_string());
+    }
+    headers
 }
 
 // ---------------------------------------------------------------------------
@@ -503,5 +616,67 @@ mod tests {
         let debug = format!("{:?}", event);
         assert!(debug.contains("171173"));
         assert!(debug.contains("RegistrationState"));
+    }
+
+    #[test]
+    fn parses_allowlisted_headers_from_the_trace_module() {
+        // Exactly the shape extract_headers() emits: printed "Name: value"
+        // lines separated by '\n'.
+        let raw = "Warning: 381 pjsip \"SIPS Required\"\n                   To: <sips:dev@pbx>\n                   From: \"Caller\" <sips:caller@pbx>;tag=abc\n";
+        let h = parse_trace_headers(raw);
+        assert_eq!(h.get("Warning").unwrap(), "381 pjsip \"SIPS Required\"");
+        assert_eq!(h.get("To").unwrap(), "<sips:dev@pbx>");
+        assert_eq!(h.get("From").unwrap(), "\"Caller\" <sips:caller@pbx>;tag=abc");
+    }
+
+    #[test]
+    fn keeps_every_repeated_header_rather_than_overwriting() {
+        // A rejection can carry more than one Warning; losing all but the last
+        // would defeat the point of capturing them.
+        let raw = "Warning: 381 pjsip \"SIPS Required\"\nWarning: 399 pjsip \"Other\"\n";
+        let h = parse_trace_headers(raw);
+        assert_eq!(
+            h.get("Warning").unwrap(),
+            "381 pjsip \"SIPS Required\", 399 pjsip \"Other\""
+        );
+    }
+
+    #[test]
+    fn header_values_containing_colons_survive_intact() {
+        // Split on the FIRST colon only — URIs are full of them.
+        let raw = "Contact: <sips:dev@192.168.1.9:5061;transport=TLS;ob>\n";
+        let h = parse_trace_headers(raw);
+        assert_eq!(
+            h.get("Contact").unwrap(),
+            "<sips:dev@192.168.1.9:5061;transport=TLS;ob>"
+        );
+    }
+
+    #[test]
+    fn tolerates_empty_and_malformed_lines() {
+        let raw = "\n\rWarning: 381 pjsip \"SIPS Required\"\r\nnot-a-header\n: novalue\n";
+        let h = parse_trace_headers(raw);
+        assert_eq!(h.len(), 1);
+        assert!(h.contains_key("Warning"));
+    }
+
+    #[test]
+    fn empty_header_block_yields_no_headers() {
+        assert!(parse_trace_headers("").is_empty());
+    }
+
+    #[test]
+    fn incoming_call_rejected_event_round_trips() {
+        let event = SipEvent::IncomingCallRejected {
+            call_id: None,
+            st_code: 480,
+            st_text: "Temporarily Unavailable".into(),
+            local_uri: "sips:dev@pbx".into(),
+            remote_uri: "sips:caller@pbx".into(),
+            sip_call_id: "abc-123".into(),
+        };
+        let debug = format!("{:?}", event.clone());
+        assert!(debug.contains("IncomingCallRejected"));
+        assert!(debug.contains("480"));
     }
 }

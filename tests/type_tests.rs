@@ -66,10 +66,18 @@ fn test_sip_event_variants() {
             status_text: "OK".into(),
             is_final: true,
         },
+        SipEvent::IncomingCallRejected {
+            call_id: None,
+            st_code: 480,
+            st_text: "Temporarily Unavailable".into(),
+            local_uri: "sips:bob@example.com".into(),
+            remote_uri: "sips:alice@example.com".into(),
+            sip_call_id: "test-call-id".into(),
+        },
     ];
     for event in &events {
         let debug = format!("{:?}", event);
         assert!(!debug.is_empty());
     }
-    assert_eq!(events.len(), 6);
+    assert_eq!(events.len(), 7);
 }
