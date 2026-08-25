@@ -95,6 +95,7 @@ fn main() {
         .allowlist_function("pjsua_get_pjsip_endpt")
         // Logging
         .allowlist_function("pjsua_logging_config_default")
+        .allowlist_function("pjsua_reconfigure_logging")
         .allowlist_function("pjsua_config_default")
         .allowlist_function("pjsua_media_config_default")
         // Transport

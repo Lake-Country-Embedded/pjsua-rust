@@ -21,8 +21,34 @@ extern void rust_sip_trace_on_msg(
     const char *sdp_body,
     int         sdp_body_len,
     const char *headers,
-    int         headers_len
+    int         headers_len,
+    const char *raw,
+    int         raw_len
 );
+
+/* ---------- raw message capture ---------- */
+
+/* Whether this message belongs to a REGISTER transaction.
+ *
+ * Only these carry their full text across the FFI boundary. Registration is low
+ * volume, and the headers that explain a failure — Authorization,
+ * WWW-Authenticate, Expires, the Contact the registrar saw — are all outside
+ * the allowlist below. Doing the same for calls would put a copy of every
+ * INVITE and its SDP into the trace ring.
+ */
+static int is_register_msg(pjsip_msg *msg)
+{
+    pjsip_cseq_hdr *cseq;
+
+    if (msg->type == PJSIP_REQUEST_MSG)
+        return pjsip_method_cmp(&msg->line.req.method,
+                                pjsip_get_register_method()) == 0;
+
+    /* A response names its transaction's method only in CSeq. */
+    cseq = (pjsip_cseq_hdr *)pjsip_msg_find_hdr(msg, PJSIP_H_CSEQ, NULL);
+    return cseq != NULL &&
+           pjsip_method_cmp(&cseq->method, pjsip_get_register_method()) == 0;
+}
 
 /* ---------- header allowlist ---------- */
 
@@ -79,7 +105,8 @@ static int extract_headers(pjsip_msg *msg, char *buf, int buf_size)
 
 /* ---------- helpers ---------- */
 
-static void extract_and_trace(pjsip_msg *msg, int is_outgoing)
+static void extract_and_trace(pjsip_msg *msg, int is_outgoing,
+                              const char *raw, int raw_len)
 {
     /* Method or status string */
     char mos_buf[128];
@@ -134,32 +161,77 @@ static void extract_and_trace(pjsip_msg *msg, int is_outgoing)
                           mos_buf, mos_len,
                           cid_ptr, cid_len,
                           sdp_ptr, sdp_len,
-                          hdr_buf, hdr_len);
+                          hdr_buf, hdr_len,
+                          raw, raw_len);
+}
+
+/* Serialize an outgoing REGISTER and trace it.
+ *
+ * The message must be printed here rather than read from `tdata->buf`: this
+ * module sits at TRANSPORT_LAYER+1 and PJSIP distributes outgoing messages
+ * lowest-priority-first, so `mod_msg_print` has not filled that buffer yet.
+ * `pjsip_msg_print` is the same call it makes on the same message.
+ *
+ * Not inlined, so only the REGISTER path pays for the print buffer —
+ * `extract_and_trace` already carries ~5 KB of locals on every SIP message.
+ */
+static __attribute__((noinline)) void trace_tx_register(pjsip_tx_data *tdata)
+{
+    char raw_buf[PJSIP_MAX_PKT_LEN];
+    int  n = pjsip_msg_print(tdata->msg, raw_buf, sizeof(raw_buf));
+
+    if (n > 0)
+        extract_and_trace(tdata->msg, 1, raw_buf, n);
+    else
+        extract_and_trace(tdata->msg, 1, NULL, 0);
+}
+
+/* Trace an outgoing message, capturing its raw text only for REGISTER. */
+static void trace_tx(pjsip_tx_data *tdata)
+{
+    if (is_register_msg(tdata->msg))
+        trace_tx_register(tdata);
+    else
+        extract_and_trace(tdata->msg, 1, NULL, 0);
+}
+
+/* Trace an incoming message. Nothing to serialize: `msg_buf` is the text as it
+ * arrived, which is what you want when the question is what a registrar sent.
+ */
+static void trace_rx(pjsip_rx_data *rdata)
+{
+    pjsip_msg *msg = rdata->msg_info.msg;
+
+    if (is_register_msg(msg))
+        extract_and_trace(msg, 0, rdata->msg_info.msg_buf,
+                          (int)rdata->msg_info.len);
+    else
+        extract_and_trace(msg, 0, NULL, 0);
 }
 
 /* ---------- module callbacks ---------- */
 
 static pj_bool_t trace_on_rx_request(pjsip_rx_data *rdata)
 {
-    extract_and_trace(rdata->msg_info.msg, 0);
+    trace_rx(rdata);
     return PJ_FALSE;          /* don't consume — let other modules process */
 }
 
 static pj_bool_t trace_on_rx_response(pjsip_rx_data *rdata)
 {
-    extract_and_trace(rdata->msg_info.msg, 0);
+    trace_rx(rdata);
     return PJ_FALSE;
 }
 
 static pj_status_t trace_on_tx_request(pjsip_tx_data *tdata)
 {
-    extract_and_trace(tdata->msg, 1);
+    trace_tx(tdata);
     return PJ_SUCCESS;
 }
 
 static pj_status_t trace_on_tx_response(pjsip_tx_data *tdata)
 {
-    extract_and_trace(tdata->msg, 1);
+    trace_tx(tdata);
     return PJ_SUCCESS;
 }
 

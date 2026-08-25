@@ -415,6 +415,8 @@ pub extern "C" fn rust_sip_trace_on_msg(
     sdp_body_len: std::os::raw::c_int,
     headers: *const std::os::raw::c_char,
     headers_len: std::os::raw::c_int,
+    raw: *const std::os::raw::c_char,
+    raw_len: std::os::raw::c_int,
 ) {
     let mos = if method_or_status.is_null() || method_or_status_len <= 0 {
         String::new()
@@ -450,6 +452,13 @@ pub extern "C" fn rust_sip_trace_on_msg(
         parse_trace_headers(&String::from_utf8_lossy(slice))
     };
 
+    let raw = if raw.is_null() || raw_len <= 0 {
+        None
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(raw as *const u8, raw_len as usize) };
+        Some(String::from_utf8_lossy(slice).to_string())
+    };
+
     let direction = if is_outgoing != 0 {
         TraceDirection::Sent
     } else {
@@ -465,6 +474,7 @@ pub extern "C" fn rust_sip_trace_on_msg(
             sip_call_id: call_id_str,
             sdp,
             headers,
+            raw,
         },
     });
 }

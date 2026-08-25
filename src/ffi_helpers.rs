@@ -143,6 +143,8 @@ pub unsafe fn extract_sip_msg_info(
         sip_call_id: String::new(),
         sdp,
         headers: HashMap::new(),
+        // Only the trace module sees the untouched message text.
+        raw: None,
     })
 }
 

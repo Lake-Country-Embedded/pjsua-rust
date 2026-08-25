@@ -55,6 +55,10 @@ const PJSUA_CALL_UNHOLD: u32 = 1;
 /// Maps PJSIP log levels to log levels:
 ///   1 = error, 2 = warn, 3 = info, 4 = debug, 5+ = trace
 ///
+/// Raw SIP message dumps are the exception: PJSIP emits them at level 4
+/// alongside ordinary diagnostics, but they are far more voluminous and only
+/// wanted at the most verbose setting, so they are demoted to `trace!`.
+///
 /// This replaces PJSIP's default console output so all SIP protocol messages
 /// (including SDP) flow through the structured logging system with correct
 /// severity levels and without duplicated timestamps.
@@ -78,9 +82,33 @@ unsafe extern "C" fn pjsip_log_cb(level: c_int, data: *const c_char, len: c_int)
         1 => log::error!(target: "pjsip", "{msg}"),
         2 => log::warn!(target: "pjsip", "{msg}"),
         3 => log::info!(target: "pjsip", "{msg}"),
+        4 if is_sip_message_dump(msg) => log::trace!(target: "pjsip", "{msg}"),
         4 => log::debug!(target: "pjsip", "{msg}"),
         _ => log::trace!(target: "pjsip", "{msg}"),
     }
+}
+
+/// Whether a level-4 line is one of `mod-pjsua-log`'s message dumps.
+///
+/// Matches the terminator rather than the `TX`/`RX` prefix, which PJSIP
+/// precedes with a source tag before the callback sees it.
+fn is_sip_message_dump(msg: &str) -> bool {
+    msg.contains("--end msg--")
+}
+
+/// Route PJSIP output through [`pjsip_log_cb`] at the given level.
+///
+/// `log_writer` only invokes the callback when `level <= console_level`, so the
+/// two are set together; `console_level = 0` would disable it entirely. Shared
+/// by init and [`PjsuaApp::set_log_level`] so a reconfigure cannot drop `cb`
+/// and hand logging back to PJSIP's stdout writer.
+fn build_logging_config(level: u32) -> ffi::pjsua_logging_config {
+    let mut log_cfg: ffi::pjsua_logging_config = Default::default();
+    unsafe { ffi::pjsua_logging_config_default(&mut log_cfg) };
+    log_cfg.level = level;
+    log_cfg.console_level = level;
+    log_cfg.cb = Some(pjsip_log_cb);
+    log_cfg
 }
 
 /// RAII wrapper around the PJSUA library.
@@ -210,26 +238,7 @@ impl PjsuaApp {
         }
 
         // --- logging config ---
-        // Route PJSIP logs through the Rust tracing/log system via callback.
-        //
-        // PJSUA's `log_writer` (pjsua_core.c:752) only invokes `log_cfg.cb`
-        // when `level <= console_level`. The intuitive `console_level=0`
-        // (to suppress duplicate stdout output) silently disables the
-        // callback for every level — meaning no SIP messages or DNS
-        // failures or media setup logs ever surface in the journal.
-        //
-        // Setting `console_level == log_cfg.level` keeps the callback
-        // path armed for all levels we care about; the callback takes
-        // priority over `pj_log_write` (the default stdout sink), so
-        // there's no duplicate output. PJSIP's verbose SIP message dumps
-        // (level 4–5) flow through `log::debug!` / `log::trace!` with
-        // `target: "pjsip"`, which is exactly what we need to debug
-        // things like RingCentral's 183-with-port-0-SDP cancel path.
-        let mut log_cfg: ffi::pjsua_logging_config = Default::default();
-        unsafe { ffi::pjsua_logging_config_default(&mut log_cfg) };
-        log_cfg.level = config.log_level;
-        log_cfg.console_level = config.log_level;
-        log_cfg.cb = Some(pjsip_log_cb);
+        let log_cfg = build_logging_config(config.log_level);
 
         // --- media config ---
         let mut media_cfg: ffi::pjsua_media_config = Default::default();
@@ -269,6 +278,27 @@ impl PjsuaApp {
         event::register_trace_module();
 
         Ok((PjsuaApp { _private: () }, rx))
+    }
+
+    // ------------------------------------------------------------------
+    // Logging
+    // ------------------------------------------------------------------
+
+    /// Change PJSIP's log level at runtime.
+    ///
+    /// PJSIP gates its own output on a level that only `pjsua_init` sets, so
+    /// raising the Rust-side filter alone does nothing: the messages are
+    /// discarded inside PJSIP long before the callback runs. Without this, a
+    /// level change requires restarting the host process.
+    ///
+    /// The caller's thread must be registered with PJLIB
+    /// ([`crate::register_thread`]).
+    pub fn set_log_level(&self, level: u32) -> Result<()> {
+        let log_cfg = build_logging_config(level);
+        let status = unsafe { ffi::pjsua_reconfigure_logging(&log_cfg) };
+        check_status(status)?;
+        info!("PJSIP log level set to {level}");
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -1352,5 +1382,41 @@ mod tests {
     fn pjsua_app_needs_drop() {
         // Verify PjsuaApp implements Drop (RAII cleanup).
         assert!(std::mem::needs_drop::<PjsuaApp>());
+    }
+
+    #[test]
+    fn recognises_pjsip_message_dumps() {
+        // Verbatim shape of `logging_on_tx_msg` / `logging_on_rx_msg` output,
+        // after the bridge has stripped PJSIP's leading timestamp.
+        let tx = "pjsua_core.c  TX 512 bytes Request msg REGISTER/cseq=1 (tdta0x55f) \
+                  to UDP 192.168.10.10:5060:\nREGISTER sip:pbx SIP/2.0\n\n--end msg--";
+        let rx = "pjsua_core.c  RX 431 bytes Response msg 401/REGISTER/cseq=1 \
+                  from UDP 192.168.10.10:5060:\nSIP/2.0 401 Unauthorized\n\n--end msg--";
+        assert!(is_sip_message_dump(tx));
+        assert!(is_sip_message_dump(rx));
+    }
+
+    #[test]
+    fn ordinary_level_four_logs_are_not_message_dumps() {
+        // These must stay at `debug!` so Debug keeps PJSIP's diagnostics.
+        for line in [
+            "pjsua_core.c  TX 512 bytes Request msg REGISTER/cseq=1",
+            "sip_transport.c  Transport udp0x55f is being destroyed",
+            "pjsua_acc.c  Acc 0: Registration sent",
+            "",
+        ] {
+            assert!(!is_sip_message_dump(line), "misclassified: {line:?}");
+        }
+    }
+
+    #[test]
+    fn logging_config_always_installs_the_rust_bridge() {
+        // A reconfigure that dropped `cb` would silently hand PJSIP's output
+        // back to its own stdout writer, i.e. out of the journal entirely.
+        let cfg = build_logging_config(4);
+        assert_eq!(cfg.level, 4);
+        // `log_writer` only invokes the callback when level <= console_level.
+        assert_eq!(cfg.console_level, 4);
+        assert!(cfg.cb.is_some());
     }
 }

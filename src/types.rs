@@ -458,6 +458,10 @@ pub struct SipMessageInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sdp: Option<String>,
     pub headers: std::collections::HashMap<String, String>,
+    /// Verbatim message text. Only populated for REGISTER transactions — see
+    /// `is_register_msg` in `trace_module.c`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
 }
 
 impl Default for PjsuaConfig {
