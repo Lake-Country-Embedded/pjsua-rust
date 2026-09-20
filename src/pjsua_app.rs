@@ -244,6 +244,9 @@ impl PjsuaApp {
         let mut media_cfg: ffi::pjsua_media_config = Default::default();
         unsafe { ffi::pjsua_media_config_default(&mut media_cfg) };
         media_cfg.clock_rate = config.clock_rate;
+        // PJSUA defaults VAD on: its adaptive detector can class a steady
+        // announcement or tone as silence and stop sending RTP mid-play.
+        media_cfg.no_vad = 1;
 
         // --- pjsua_init ---
         let status = unsafe { ffi::pjsua_init(&ua_cfg, &log_cfg, &media_cfg) };
