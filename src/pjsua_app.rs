@@ -585,38 +585,13 @@ impl PjsuaApp {
             debug!("remove_account: account {} already invalid — nothing to do", id.0);
             return Ok(());
         }
-        // Best-effort unregister (fails for P2P accounts or mid-transaction).
-        let status = unsafe { ffi::pjsua_acc_set_registration(id.0, 0) };
-        if status != 0 {
-            warn!(
-                "could not unregister account {} (status={}), proceeding with removal",
-                id.0, status
-            );
-        }
-        // Delete the account, retrying if EBUSY (in-flight REGISTER
-        // transaction hasn't completed yet after set_registration(false)).
+        // pjsua_acc_del() unregisters on its own (pjsua_acc.c: it calls
+        // pjsua_acc_set_registration(acc_id, PJ_FALSE) before destroying the
+        // regc). Unregistering here first put a REGISTER transaction in flight,
+        // so that internal call hit PJSIP_EBUSY and PJSIP logged an error for
+        // every probe account teardown.
         let status = unsafe { ffi::pjsua_acc_del(id.0) };
-        if status == 171001 {
-            // PJSIP_EBUSY — wait for the in-flight transaction to settle
-            warn!("account {} busy, retrying removal after 200ms", id.0);
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            let status = unsafe { ffi::pjsua_acc_del(id.0) };
-            if status == 171001 {
-                warn!("account {} still busy, retrying removal after 500ms", id.0);
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                let status = unsafe { ffi::pjsua_acc_del(id.0) };
-                if status != 0 {
-                    warn!(
-                        "account {} removal failed after retries (status={})",
-                        id.0, status
-                    );
-                }
-            } else if status != 0 {
-                check_status(status)?;
-            }
-        } else {
-            check_status(status)?;
-        }
+        check_status(status)?;
         info!("account removed: id={}", id.0);
         Ok(())
     }
