@@ -13,6 +13,7 @@ use crate::ffi;
 use crate::ffi_helpers::{pj_str_to_string, pj_strerror_to_string};
 use crate::types::{
     AccountId, CallId, CallState, ConfPort, MediaStatus, SipMessageInfo, TraceDirection,
+    VideoDirection, VideoMediaState,
 };
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,15 @@ pub enum SipEvent {
         account_id: AccountId,
         media_status: MediaStatus,
         conf_port: Option<ConfPort>,
+    },
+    /// The state of a call's video stream changed, or was reported along
+    /// with a media update. Sent only for calls whose SDP has a video
+    /// m-line; a stream that was rejected or removed reports
+    /// `MediaStatus::None`.
+    CallVideoState {
+        call_id: CallId,
+        account_id: AccountId,
+        video: VideoMediaState,
     },
     /// A DTMF digit was received on a call.
     DtmfDigit { call_id: CallId, digit: char },
@@ -328,6 +338,52 @@ pub(crate) unsafe extern "C" fn on_call_media_state(call_id: ffi::pjsua_call_id)
         media_status,
         conf_port,
     });
+
+    if let Some(video) = video_media_state(call_id, &info) {
+        send_event(SipEvent::CallVideoState {
+            call_id: CallId(call_id),
+            account_id: AccountId(info.acc_id),
+            video,
+        });
+    }
+}
+
+/// The first video stream of a call, if its SDP has one.
+fn video_media_state(
+    call_id: ffi::pjsua_call_id,
+    info: &ffi::pjsua_call_info,
+) -> Option<VideoMediaState> {
+    let count = (info.media_cnt as usize).min(info.media.len());
+    info.media[..count]
+        .iter()
+        .enumerate()
+        .find(|(_, m)| m.type_ == ffi::pjmedia_type_PJMEDIA_TYPE_VIDEO)
+        .map(|(idx, m)| {
+            let status = MediaStatus::from_pjsip(m.status);
+            // PJSUA reports sendonly as LOCAL_HOLD and recvonly as
+            // REMOTE_HOLD; both are live video streams.
+            let up = matches!(
+                status,
+                MediaStatus::Active | MediaStatus::LocalHold | MediaStatus::RemoteHold
+            );
+            let direction = if up {
+                VideoDirection::from_pjmedia(m.dir)
+            } else {
+                None
+            };
+            #[cfg(feature = "video")]
+            let remote = direction.and_then(|_| crate::video::remote_caps(call_id, idx));
+            #[cfg(not(feature = "video"))]
+            let remote = {
+                let _ = (call_id, idx);
+                None
+            };
+            VideoMediaState {
+                status,
+                direction,
+                remote,
+            }
+        })
 }
 
 /// `on_dtmf_digit2` callback — DTMF digit received.

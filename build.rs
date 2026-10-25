@@ -12,6 +12,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/trace_module.c");
     println!("cargo:rerun-if-changed=src/transport_helper.c");
     println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-changed=src/video_passthrough.c");
+    println!("cargo:rerun-if-changed=src/video_passthrough.h");
 
     // Use pkg-config to find libpjproject and get include/link flags
     let lib = pkg_config::Config::new()
@@ -117,12 +119,14 @@ fn main() {
         // Calls
         .allowlist_function("pjsua_call_make_call")
         .allowlist_function("pjsua_call_answer")
+        .allowlist_function("pjsua_call_answer2")
         .allowlist_function("pjsua_call_hangup")
         .allowlist_function("pjsua_call_hangup_all")
         .allowlist_function("pjsua_call_get_info")
         .allowlist_function("pjsua_call_get_count")
         .allowlist_function("pjsua_call_set_hold")
         .allowlist_function("pjsua_call_reinvite")
+        .allowlist_function("pjsua_call_reinvite2")
         .allowlist_function("pjsua_call_xfer")
         .allowlist_function("pjsua_call_dial_dtmf")
         .allowlist_function("pjsua_call_send_dtmf")
@@ -250,4 +254,20 @@ fn main() {
         }
     }
     cc_trace.compile("trace_module");
+
+    // H.264 passthrough (needs pjproject built with video)
+    if env::var_os("CARGO_FEATURE_VIDEO").is_some() {
+        let mut cc_video = cc::Build::new();
+        cc_video.file("src/video_passthrough.c");
+        for path in &lib.include_paths {
+            cc_video.include(path);
+        }
+        for (key, val) in &lib.defines {
+            match val {
+                Some(v) => { cc_video.define(key, v.as_str()); }
+                None => { cc_video.define(key, None); }
+            }
+        }
+        cc_video.compile("video_passthrough");
+    }
 }

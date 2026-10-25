@@ -50,6 +50,9 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Flag for `pjsua_call_reinvite` to take a call off hold.
 const PJSUA_CALL_UNHOLD: u32 = 1;
 
+/// `pjsua_call_setting` flag: apply `media_dir`.
+const PJSUA_CALL_SET_MEDIA_DIR: u32 = 128;
+
 /// PJSIP log callback that bridges native C logs into the Rust `log` crate.
 ///
 /// Maps PJSIP log levels to log levels:
@@ -618,30 +621,7 @@ impl PjsuaApp {
 
     /// Place an outgoing call and return the call ID.
     pub fn make_call(&self, account: AccountId, uri: &str) -> Result<CallId> {
-        let dst = PjString::new(uri);
-        let pj_dst = dst.as_pj_str();
-        let mut opt: ffi::pjsua_call_setting = Default::default();
-        unsafe { ffi::pjsua_call_setting_default(&mut opt) };
-        // PJSIP 2.16's call-setting default enables one T.140 real-time-text
-        // stream (txt_cnt=1). That extra `m=text` line in the SDP offer makes
-        // many PSTN carrier SBCs (OnSIP, Nextiva, ...) reject the entire INVITE
-        // with `488 Not Acceptable Here` instead of just zeroing the m-line.
-        // These products don't use SIP real-time text, so never offer it.
-        opt.txt_cnt = 0;
-        let mut call_id: ffi::pjsua_call_id = -1;
-        let status = unsafe {
-            ffi::pjsua_call_make_call(
-                account.0,
-                &pj_dst,
-                &opt,
-                ptr::null_mut(),
-                ptr::null(),
-                &mut call_id,
-            )
-        };
-        check_status(status)?;
-        debug!("call made: call_id={call_id} uri={uri}");
-        Ok(CallId(call_id))
+        self.make_call_with_setting(account, uri, &CallSetting::default())
     }
 
     /// Place an outgoing call with a custom [`CallSetting`].
@@ -651,7 +631,7 @@ impl PjsuaApp {
     /// without an SDP body and answer in ACK after the peer offers in
     /// the 200 OK. Helpful when the peer's early SDP behavior trips
     /// PJSUA's auto-cancel path (RingCentral's unreliable 183 with
-    /// `m=audio 0 a=inactive`).
+    /// `m=audio 0 a=inactive`), or `video` to offer a video stream.
     pub fn make_call_with_setting(
         &self,
         account: AccountId,
@@ -662,14 +642,15 @@ impl PjsuaApp {
         let pj_dst = dst.as_pj_str();
         let mut opt: ffi::pjsua_call_setting = Default::default();
         unsafe { ffi::pjsua_call_setting_default(&mut opt) };
-        // Suppress the T.140 real-time-text stream PJSIP 2.16 offers by
-        // default (see `make_call`); the stray `m=text` line trips PSTN SBCs
-        // into a 488 rejection.
+        // PJSIP's call-setting default (since 2.16) offers a T.140 text
+        // stream; the extra `m=text` line makes many PSTN carrier SBCs reject
+        // the whole INVITE with 488 instead of zeroing the m-line.
         opt.txt_cnt = 0;
         if setting.late_offer {
             // PJSUA_CALL_NO_SDP_OFFER = 8 (per pjsua.h pjsua_call_flag).
             opt.flag |= 8;
         }
+        apply_video_setting(&mut opt, setting.video);
         let mut call_id: ffi::pjsua_call_id = -1;
         let status = unsafe {
             ffi::pjsua_call_make_call(
@@ -683,15 +664,48 @@ impl PjsuaApp {
         };
         check_status(status)?;
         debug!(
-            "call made (late_offer={}): call_id={call_id} uri={uri}",
-            setting.late_offer
+            "call made (late_offer={}, video={:?}): call_id={call_id} uri={uri}",
+            setting.late_offer, setting.video
         );
         Ok(CallId(call_id))
     }
 
     /// Answer an incoming call with the given SIP status code (e.g. 200).
+    ///
+    /// The call is answered audio only; see [`Self::answer_call_with_video`].
     pub fn answer_call(&self, call: CallId, code: u32) -> Result<()> {
-        let status = unsafe { ffi::pjsua_call_answer(call.0, code, ptr::null(), ptr::null()) };
+        self.answer_call_with_video(call, code, None)
+    }
+
+    /// Answer an incoming call, accepting one video stream in `video`'s
+    /// direction if the offer has one.
+    ///
+    /// PJSUA fixes a call's media on the first 1xx/2xx answer that carries a
+    /// setting and ignores later changes, so use the same `video` for a
+    /// provisional answer and the final one.
+    pub fn answer_call_with_video(
+        &self,
+        call: CallId,
+        code: u32,
+        video: Option<VideoDirection>,
+    ) -> Result<()> {
+        let mut info: ffi::pjsua_call_info = Default::default();
+        check_status(unsafe { ffi::pjsua_call_get_info(call.0, &mut info) })?;
+
+        // An incoming call starts from PJSUA's default setting, which has a
+        // video stream when PJSIP is built with video. Pass a setting only
+        // when it differs from that.
+        let mut opt = info.setting;
+        apply_video_setting(&mut opt, video);
+        let changed = opt.vid_cnt != info.setting.vid_cnt || opt.flag != info.setting.flag;
+        let opt_ptr = if changed {
+            &opt as *const _
+        } else {
+            ptr::null()
+        };
+
+        let status =
+            unsafe { ffi::pjsua_call_answer2(call.0, opt_ptr, code, ptr::null(), ptr::null()) };
         check_status(status)
     }
 
@@ -709,7 +723,23 @@ impl PjsuaApp {
 
     /// Take a call off hold (re-INVITE with unhold).
     pub fn unhold_call(&self, call: CallId) -> Result<()> {
-        let status = unsafe { ffi::pjsua_call_reinvite(call.0, PJSUA_CALL_UNHOLD, ptr::null()) };
+        self.reinvite_with(call, PJSUA_CALL_UNHOLD)
+    }
+
+    /// Re-INVITE with a fresh offer, built from the current codec settings.
+    pub fn reinvite_call(&self, call: CallId) -> Result<()> {
+        self.reinvite_with(call, 0)
+    }
+
+    /// Re-INVITE with the call's own setting plus `flags`.
+    /// `pjsua_call_reinvite` would replace the call's flags with `flags`,
+    /// dropping the media directions it was set up with.
+    fn reinvite_with(&self, call: CallId, flags: u32) -> Result<()> {
+        let mut info: ffi::pjsua_call_info = Default::default();
+        check_status(unsafe { ffi::pjsua_call_get_info(call.0, &mut info) })?;
+        let mut opt = info.setting;
+        opt.flag = (opt.flag & PJSUA_CALL_SET_MEDIA_DIR) | flags;
+        let status = unsafe { ffi::pjsua_call_reinvite2(call.0, &opt, ptr::null()) };
         check_status(status)
     }
 
@@ -1279,7 +1309,30 @@ fn populate_acc_cfg(acc_cfg: &mut ffi::pjsua_acc_config, config: &AccountConfig)
         acc_cfg.require_100rel = rel.to_pjsip();
     }
 
+    if let Some(devs) = config.video_devices {
+        acc_cfg.vid_cap_dev = devs.capture;
+        acc_cfg.vid_rend_dev = devs.render;
+        acc_cfg.vid_out_auto_transmit = 1;
+        acc_cfg.vid_in_auto_show = 0;
+    }
+
     strings
+}
+
+/// Set a call's video stream count and direction.
+///
+/// PJSUA indexes `media_dir` by new audio streams first, then video, so with
+/// the single audio stream these calls use, the video direction is entry 1.
+fn apply_video_setting(opt: &mut ffi::pjsua_call_setting, video: Option<VideoDirection>) {
+    match video {
+        None => opt.vid_cnt = 0,
+        Some(dir) => {
+            opt.vid_cnt = 1;
+            opt.flag |= PJSUA_CALL_SET_MEDIA_DIR;
+            opt.media_dir[0] = ffi::pjmedia_dir_PJMEDIA_DIR_ENCODING_DECODING;
+            opt.media_dir[1] = dir.to_pjmedia();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

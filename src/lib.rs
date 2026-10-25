@@ -10,6 +10,8 @@ mod pjsua_app;
 pub mod tonegen;
 pub mod types;
 pub mod version;
+#[cfg(feature = "video")]
+pub mod video;
 
 pub use config::Config;
 pub use error::{check_status, PjError, Result};
@@ -19,3 +21,8 @@ pub use media_port::{AudioFrame, CustomPort, MediaPort};
 pub use pjsua_app::{register_thread, PjsuaApp};
 pub use tonegen::{DtmfDigit, ToneDesc, ToneGenerator};
 pub use types::*;
+#[cfg(feature = "video")]
+pub use video::{
+    H264Profile, H264ReceiveLimits, PassthroughConfig, VideoHandler, VideoPassthrough,
+    VideoStreamInfo,
+};

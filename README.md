@@ -17,6 +17,7 @@ pjsua-rust wraps the PJSUA level-1 C API in safe Rust types with RAII lifecycle 
 - **Conference bridge** — Connect, disconnect, and enumerate ports on the PJSUA conference bridge.
 - **WAV player/recorder** — Create file players and recorders attached to the conference bridge.
 - **Codec control** — Set codec priorities to enable, disable, or reorder codecs.
+- **H.264 passthrough video** (optional `video` feature) — Send and receive pre-encoded H.264 access units while PJSUA handles SDP, RTP/RTCP and SRTP. Needs PJSIP built with `PJMEDIA_HAS_VIDEO=1`; calls stay audio only unless video is requested per call.
 
 ## Prerequisites
 
@@ -204,6 +205,14 @@ cargo test --features integration-tests -- --test-threads=1
 
 The `--test-threads=1` flag is required because PJSUA is a global singleton — only one instance can exist at a time.
 
+### Video tests
+
+Loopback tests for the H.264 passthrough. They need PJSIP built with video:
+
+```bash
+cargo test --features video
+```
+
 ### Memory leak testing
 
 Leak tests run under Valgrind to verify that the RAII cleanup paths properly release all PJSIP resources:
@@ -237,6 +246,8 @@ pjsua-rust/
 │   ├── pjsua_app.rs          # PjsuaApp RAII singleton
 │   ├── media_port.rs         # MediaPort trait, CustomPort
 │   ├── tonegen.rs            # ToneGenerator
+│   ├── video.rs              # H.264 passthrough (video feature)
+│   ├── video_passthrough.c   # Passthrough codec and devices (video feature)
 │   └── version.rs            # PJSIP version parsing utilities
 ├── config/
 │   └── test-accounts.toml.example
@@ -247,6 +258,7 @@ pjsua-rust/
 │   ├── type_tests.rs         # Type equality, hashing, event variants
 │   ├── integration.rs        # Live SIP integration tests (feature-gated)
 │   ├── media_tests.rs        # Conference bridge, tonegen, custom port tests
+│   ├── video_tests.rs        # H.264 passthrough loopback tests (video feature)
 │   └── leak_tests.rs         # Memory leak stress tests (for Valgrind)
 ├── scripts/
 │   └── valgrind-test.sh      # Automated Valgrind leak checker

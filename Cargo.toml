@@ -8,6 +8,9 @@ license = "MIT"
 [features]
 default = []
 integration-tests = []
+# H.264 passthrough video; requires pjproject built with video
+# (PJMEDIA_HAS_VIDEO=1).
+video = []
 
 [dependencies]
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"] }

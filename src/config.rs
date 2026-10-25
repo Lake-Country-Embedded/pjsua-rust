@@ -115,6 +115,7 @@ impl TomlAccountConfig {
             transport_id: None,
             require_100rel: None,
             srtp_secure_signaling: None,
+            video_devices: None,
         }
     }
 }

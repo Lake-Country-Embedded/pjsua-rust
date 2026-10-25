@@ -230,6 +230,89 @@ pub struct CallSetting {
     /// auto-cancel path (RingCentral's unreliable 183 with
     /// `m=audio 0 a=inactive`).
     pub late_offer: bool,
+    /// Offer (or, when answering, accept) one video stream in this
+    /// direction. `None` means audio only, even when PJSIP is built with
+    /// video, whose own default would otherwise add a video stream to
+    /// every call.
+    pub video: Option<VideoDirection>,
+}
+
+/// Direction of a call's video stream, from this endpoint's side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoDirection {
+    /// Send only (`a=sendonly`).
+    SendOnly,
+    /// Receive only (`a=recvonly`).
+    RecvOnly,
+    /// Send and receive.
+    SendRecv,
+}
+
+impl VideoDirection {
+    pub(crate) fn to_pjmedia(self) -> u32 {
+        match self {
+            VideoDirection::SendOnly => ffi::pjmedia_dir_PJMEDIA_DIR_ENCODING,
+            VideoDirection::RecvOnly => ffi::pjmedia_dir_PJMEDIA_DIR_DECODING,
+            VideoDirection::SendRecv => ffi::pjmedia_dir_PJMEDIA_DIR_ENCODING_DECODING,
+        }
+    }
+
+    /// Convert from a PJMEDIA direction; `None` for no direction (inactive).
+    pub fn from_pjmedia(dir: u32) -> Option<Self> {
+        match dir {
+            x if x == ffi::pjmedia_dir_PJMEDIA_DIR_ENCODING => Some(VideoDirection::SendOnly),
+            x if x == ffi::pjmedia_dir_PJMEDIA_DIR_DECODING => Some(VideoDirection::RecvOnly),
+            x if x == ffi::pjmedia_dir_PJMEDIA_DIR_ENCODING_DECODING => {
+                Some(VideoDirection::SendRecv)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Video devices an account captures from and renders to.
+///
+/// Device indexes are PJMEDIA video device indexes, e.g. those returned by
+/// installing the H.264 passthrough (`video` feature).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoDevices {
+    pub capture: i32,
+    pub render: i32,
+}
+
+/// State of a call's video stream, reported with
+/// [`SipEvent::CallVideoState`](crate::SipEvent::CallVideoState).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoMediaState {
+    /// Media status of the video stream, as PJSUA reports it: a sendonly
+    /// stream shows as `LocalHold` and a recvonly one as `RemoteHold`.
+    pub status: MediaStatus,
+    /// Negotiated direction; `None` if the stream is inactive or rejected.
+    pub direction: Option<VideoDirection>,
+    /// What the remote said it can receive, once the stream exists. Only
+    /// with the `video` feature.
+    pub remote: Option<H264RemoteCaps>,
+}
+
+/// The H.264 a call's remote can receive, from its SDP.
+///
+/// `max_fs`, `max_mbps` and `max_br_kbps` already include the limits its
+/// level implies (H.264 Table A-1); explicit fmtp values can only raise
+/// them. All are 0 when the remote gave no `profile-level-id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct H264RemoteCaps {
+    /// `profile-level-id` as (profile_idc, profile_iop, level_idc), if given.
+    pub profile_level_id: Option<(u8, u8, u8)>,
+    pub packetization_mode: u8,
+    /// Largest frame, in macroblocks.
+    pub max_fs: u32,
+    /// Macroblocks per second.
+    pub max_mbps: u32,
+    pub max_br_kbps: u32,
+    /// `b=TIAS` of its video media section, bits per second.
+    pub tias_bps: Option<u32>,
+    /// `b=AS` of its video media section, kbit/s.
+    pub as_kbps: Option<u32>,
 }
 
 /// DTMF sending method.
@@ -548,6 +631,11 @@ pub struct AccountConfig {
     /// INVITE goes out as plain `RTP/AVP`, which an SRTP-only peer
     /// rejects with `m=audio 0 a=inactive` in its 18x/200 OK SDP.
     pub srtp_secure_signaling: Option<SrtpSecureSignaling>,
+    /// Video devices for calls on this account. When set, outgoing video
+    /// starts automatically and incoming video is rendered to `render`
+    /// without a window. Video still has to be requested per call through
+    /// [`CallSetting::video`].
+    pub video_devices: Option<VideoDevices>,
 }
 
 impl Default for AccountConfig {
@@ -575,6 +663,7 @@ impl Default for AccountConfig {
             transport_id: None,
             require_100rel: None,
             srtp_secure_signaling: None,
+            video_devices: None,
         }
     }
 }
