@@ -283,6 +283,11 @@ impl PjsuaApp {
         // Register the SIP trace module now that PJSIP is running.
         event::register_trace_module();
 
+        let status = unsafe { ffi::pjsua_tls_tracker_install() };
+        if status != 0 {
+            warn!("TLS connection tracking unavailable: {}", make_pj_error(status));
+        }
+
         Ok((PjsuaApp { _private: () }, rx))
     }
 
@@ -507,6 +512,16 @@ impl PjsuaApp {
         check_status(status)?;
         debug!("transport closed: id={} force={force}", id.0);
         Ok(())
+    }
+
+    /// Shut down every open TLS connection, returning how many there were.
+    ///
+    /// Closing a TLS listener leaves its connections open; call this after a
+    /// TLS credential change so no request reuses one made with the old ones.
+    pub fn shutdown_tls_connections(&self) -> u32 {
+        let count = unsafe { ffi::pjsua_tls_shutdown_connections() };
+        debug!("TLS connections shut down: {count}");
+        count
     }
 
     /// Update a transport's published address (addr_name) in-place.

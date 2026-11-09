@@ -106,6 +106,8 @@ fn main() {
         .allowlist_function("pjsua_transport_close")
         .allowlist_function("pjsua_transport_config_default")
         .allowlist_function("pjsua_transport_set_published_address")
+        .allowlist_function("pjsua_tls_tracker_install")
+        .allowlist_function("pjsua_tls_shutdown_connections")
         // Account
         .allowlist_function("pjsua_acc_config_default")
         .allowlist_function("pjsua_acc_add")
