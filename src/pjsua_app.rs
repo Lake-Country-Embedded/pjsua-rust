@@ -38,6 +38,7 @@ extern "C" {
     ) -> i32;
 }
 
+use crate::check_sync;
 use crate::error::{check_status, make_pj_error, PjError, Result};
 use crate::event::{self, SipEvent};
 use crate::ffi;
@@ -282,6 +283,8 @@ impl PjsuaApp {
 
         // Register the SIP trace module now that PJSIP is running.
         event::register_trace_module();
+        // Answer check-sync NOTIFYs from the registered server.
+        check_sync::register_module();
 
         let status = unsafe { ffi::pjsua_tls_tracker_install() };
         if status != 0 {
@@ -562,6 +565,17 @@ impl PjsuaApp {
         unsafe { ffi::pjsua_acc_config_default(&mut acc_cfg) };
         let _strings = populate_acc_cfg(&mut acc_cfg, config);
 
+        // Forget the account's check-sync server first, whatever
+        // pjsua_acc_modify then does. When the change needs a new
+        // registration, pjsua unregisters and destroys the regc at once, and
+        // that unregister's result never reaches on_reg_state2 (regc_cb drops
+        // results for a replaced regc), so the old server's record would stay
+        // valid until the new REGISTER's outcome, or for good if that REGISTER
+        // fails to start. Deliberately unconditional, not "only when pjsua
+        // re-registers": guessing that wrong keeps the old server trusted.
+        // Cost, accepted: a change that does not re-register leaves the
+        // account refusing check-sync until its next registration refresh.
+        check_sync::forget_account(id);
         let status = unsafe { ffi::pjsua_acc_modify(id.0, &acc_cfg) };
         check_status(status)?;
         info!("account modified: id={} name={}", id.0, config.name);
@@ -587,6 +601,15 @@ impl PjsuaApp {
             debug!("set_registration: account {} no longer valid — skipping", id.0);
             return Ok(());
         }
+        // Forget the account's check-sync server first, in both directions.
+        // pjsua_acc_set_registration cancels PJSIP's auto re-registration
+        // timer before anything else, and a REGISTER or unregister whose send
+        // fails at once may never reach on_reg_state2 (sip_reg.c: "On failure,
+        // regc_tsx_callback() may not be called"), so the old record could
+        // outlive a registration that is no longer refreshed. Deliberately
+        // unconditional. Cost, accepted: check-sync is refused until the new
+        // REGISTER's outcome records the server again.
+        check_sync::forget_account(id);
         let renew: ffi::pj_bool_t = if register { 1 } else { 0 };
         let status = unsafe { ffi::pjsua_acc_set_registration(id.0, renew) };
         check_status(status)?;
@@ -609,6 +632,9 @@ impl PjsuaApp {
         // so that internal call hit PJSIP_EBUSY and PJSIP logged an error for
         // every probe account teardown.
         let status = unsafe { ffi::pjsua_acc_del(id.0) };
+        // Forget its server even if the delete reported an error: a
+        // check-sync must never be accepted for an account in doubt.
+        check_sync::forget_account(id);
         check_status(status)?;
         info!("account removed: id={}", id.0);
         Ok(())
@@ -1404,6 +1430,7 @@ impl Drop for PjsuaApp {
         // 4. Reset the singleton flag — allows a new PjsuaApp to be created.
         unsafe { ffi::pjsua_stop_worker_threads() };
         event::unregister_trace_module();
+        check_sync::unregister_module();
         event::clear_event_sender();
         unsafe { ffi::pjsua_destroy() };
         INITIALIZED.store(false, Ordering::SeqCst);

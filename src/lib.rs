@@ -1,5 +1,6 @@
 //! Safe Rust bindings for PJSIP's PJSUA library.
 
+mod check_sync;
 pub mod config;
 mod error;
 pub mod event;

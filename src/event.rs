@@ -125,6 +125,21 @@ pub enum SipEvent {
         account_id: AccountId,
         info: SipMessageInfo,
     },
+    /// The server an account is registered with sent an out-of-dialog
+    /// `NOTIFY` with `Event: check-sync`, and it has been answered `200 OK`.
+    ///
+    /// Raised only when the request's source IP address and transport (UDP,
+    /// TCP or TLS) equal those of the account's last successful REGISTER
+    /// answer; the port is not compared. Any other `check-sync` is left
+    /// unanswered and raises nothing.
+    CheckSync {
+        account_id: AccountId,
+        /// Value of the Event header's `reboot` parameter as received
+        /// (e.g. `"true"`); `None` when the parameter is absent.
+        reboot_param: Option<String>,
+        /// The sender's IP address as text, without a port.
+        source: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +163,7 @@ pub(crate) fn clear_event_sender() {
 
 /// Send an event through the global channel. Silently drops if the
 /// receiver has been closed or the sender was never installed.
-fn send_event(event: SipEvent) {
+pub(crate) fn send_event(event: SipEvent) {
     if let Ok(guard) = EVENT_TX.lock() {
         if let Some(tx) = guard.as_ref() {
             if let Err(e) = tx.send(event) {
@@ -172,6 +187,11 @@ pub(crate) unsafe extern "C" fn on_reg_state2(
     acc_id: ffi::pjsua_acc_id,
     info: *mut ffi::pjsua_reg_info,
 ) {
+    // First, and before the early return below: any outcome other than a
+    // successful registration must forget the account's server, so a
+    // check-sync is never accepted on the strength of a stale record.
+    unsafe { crate::check_sync::on_reg_state(acc_id, info) };
+
     let mut acc_info: ffi::pjsua_acc_info = Default::default();
     let status = unsafe { ffi::pjsua_acc_get_info(acc_id, &mut acc_info) };
     if status != 0 {
