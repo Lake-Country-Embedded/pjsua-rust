@@ -10,7 +10,8 @@ pjsua-rust wraps the PJSUA level-1 C API in safe Rust types with RAII lifecycle 
 
 - **RAII singleton** — `PjsuaApp` manages the full `pjsua_create`/`init`/`start`/`destroy` lifecycle. Dropping the handle cleans up all PJSIP resources.
 - **Typed IDs** — `AccountId`, `CallId`, `ConfPort`, etc. prevent mixing up integer handles.
-- **Async events** — SIP callbacks are bridged to a `tokio::sync::mpsc` channel producing typed `SipEvent` variants (registration, incoming call, call state, media state, DTMF).
+- **Async events** — SIP callbacks are bridged to a `tokio::sync::mpsc` channel producing typed `SipEvent` variants (registration, incoming call, call state, media state, DTMF, check-sync).
+- **check-sync from the registered server** — An out-of-dialog `NOTIFY` with `Event: check-sync` is answered `200 OK` and raised as `SipEvent::CheckSync` only when it comes from the source IP address, over the transport (UDP, TCP or TLS), of an account's last successful REGISTER answer. From anywhere else it gets no answer, as before.
 - **TOML configuration** — Load account and general settings from TOML files with sensible defaults.
 - **Custom audio ports** — Implement the `MediaPort` trait to inject or process audio frames on the conference bridge.
 - **Tone generator** — Play DTMF digits and custom tones via `ToneGenerator`.
@@ -163,6 +164,7 @@ See `config/test-accounts.toml.example` for the configuration format.
 | `CallState` | Call state transitions (calling, confirmed, disconnected, etc.) |
 | `CallMediaState` | Media becomes active/held/error |
 | `DtmfDigit` | A DTMF digit is received on a call |
+| `CheckSync` | The server an account is registered with sends an out-of-dialog `check-sync` NOTIFY (answered `200 OK`); carries the `reboot` parameter as received and the sender's IP address |
 
 ## Configuration
 

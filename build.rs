@@ -10,6 +10,7 @@ fn main() {
     // rust_sip_trace_on_msg(), so a signature change on one side and not the
     // other produces an ABI mismatch that reads garbage arguments.
     println!("cargo:rerun-if-changed=src/trace_module.c");
+    println!("cargo:rerun-if-changed=src/check_sync_module.c");
     println!("cargo:rerun-if-changed=src/transport_helper.c");
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=src/video_passthrough.c");
@@ -108,6 +109,11 @@ fn main() {
         .allowlist_function("pjsua_transport_set_published_address")
         .allowlist_function("pjsua_tls_tracker_install")
         .allowlist_function("pjsua_tls_shutdown_connections")
+        // check-sync module (src/check_sync_module.c)
+        .allowlist_function("check_sync_module_register")
+        .allowlist_function("check_sync_module_unregister")
+        .allowlist_function("check_sync_on_reg_state")
+        .allowlist_function("check_sync_forget_account")
         // Account
         .allowlist_function("pjsua_acc_config_default")
         .allowlist_function("pjsua_acc_add")
@@ -256,6 +262,20 @@ fn main() {
         }
     }
     cc_trace.compile("trace_module");
+
+    // Compile the check-sync module
+    let mut cc_check_sync = cc::Build::new();
+    cc_check_sync.file("src/check_sync_module.c");
+    for path in &lib.include_paths {
+        cc_check_sync.include(path);
+    }
+    for (key, val) in &lib.defines {
+        match val {
+            Some(v) => { cc_check_sync.define(key, v.as_str()); }
+            None => { cc_check_sync.define(key, None); }
+        }
+    }
+    cc_check_sync.compile("check_sync_module");
 
     // H.264 passthrough (needs pjproject built with video)
     if env::var_os("CARGO_FEATURE_VIDEO").is_some() {
