@@ -435,6 +435,13 @@ impl VideoPassthrough {
         let mut q = self.shared.queue.lock().unwrap_or_else(|e| e.into_inner());
         q.frames.clear();
         q.need_keyframe = false;
+        drop(q);
+        // Callers are async tasks that land on whichever worker is free, and
+        // the C side takes a PJLIB mutex.
+        if let Err(e) = crate::register_thread("video-passthrough") {
+            warn!("video passthrough: could not register the thread with PJLIB: {e}");
+            return;
+        }
         unsafe { pjrs_vpt_source_restarted() };
     }
 
