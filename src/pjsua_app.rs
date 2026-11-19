@@ -251,6 +251,9 @@ impl PjsuaApp {
         // PJSUA defaults VAD on: its adaptive detector can class a steady
         // announcement or tone as silence and stop sending RTP mid-play.
         media_cfg.no_vad = 1;
+        // The default (8) resamples every call leg with the large filter,
+        // which costs a third of a core on a Cortex-A9. 4 is the small one.
+        media_cfg.quality = 4;
 
         // --- pjsua_init ---
         let status = unsafe { ffi::pjsua_init(&ua_cfg, &log_cfg, &media_cfg) };
