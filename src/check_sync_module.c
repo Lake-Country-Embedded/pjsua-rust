@@ -1,9 +1,12 @@
 /*
- * PJSIP module that answers an out-of-dialog `check-sync` NOTIFY from the
- * server an account is registered with.
+ * PJSIP module that answers an out-of-dialog `check-sync` (or `resync`) NOTIFY
+ * from the server an account is registered with.
  *
  * Phone systems send such a NOTIFY to tell a device to fetch its provisioning
  * again (`Event: check-sync`) or to restart (`Event: check-sync;reboot=true`).
+ * BroadWorks and some Poly setups send the same request as `Event: resync`;
+ * both package names are compared without regard to case, and no other name
+ * is taken.
  * They send it without credentials, so the only check there is on the sender:
  * the request is taken only when its source IP address and its transport type
  * equal those of the last successful REGISTER answer of an account that is
@@ -11,7 +14,7 @@
  *
  * A request that is taken is answered 200 OK statelessly and handed to Rust,
  * which raises `SipEvent::CheckSync`. Any other request is left to the other
- * modules (PJ_FALSE): a check-sync from anyone else gets no answer at all,
+ * modules (PJ_FALSE): a check-sync or resync from anyone else gets no answer at all,
  * as before this module existed, and pjsua's own unsolicited MWI handler
  * still sees `Event: message-summary`.
  *
@@ -154,11 +157,13 @@ static pj_bool_t check_sync_on_rx_request(pjsip_rx_data *rdata)
      */
     event = (pjsip_event_hdr *)
         pjsip_msg_find_hdr_by_names(msg, &EVENT_HDR, &EVENT_HDR_SHORT, NULL);
-    if (!event || pj_stricmp2(&event->event_type, "check-sync") != 0)
+    if (!event ||
+        (pj_stricmp2(&event->event_type, "check-sync") != 0 &&
+         pj_stricmp2(&event->event_type, "resync") != 0))
         return PJ_FALSE;
 
     if (!is_ip_family(&rdata->pkt_info.src_addr)) {
-        PJ_LOG(5, (THIS_FILE, "check-sync refused: source is not an IP address"));
+        PJ_LOG(5, (THIS_FILE, "check-sync/resync refused: source is not an IP address"));
         return PJ_FALSE;
     }
     /* Empty, not garbage, if pj_sockaddr_print() fails without writing. */
@@ -167,7 +172,7 @@ static pj_bool_t check_sync_on_rx_request(pjsip_rx_data *rdata)
 
     acc_id = find_registered_account(rdata);
     if (acc_id == PJSUA_INVALID_ID) {
-        PJ_LOG(5, (THIS_FILE, "check-sync from %s refused: not the registered "
+        PJ_LOG(5, (THIS_FILE, "check-sync/resync from %s refused: not the registered "
                    "server of a registered account over this transport",
                    source));
         return PJ_FALSE;
@@ -180,7 +185,7 @@ static pj_bool_t check_sync_on_rx_request(pjsip_rx_data *rdata)
     status = pjsip_endpt_respond_stateless(pjsua_get_pjsip_endpt(), rdata,
                                            200, NULL, NULL, NULL);
     if (status != PJ_SUCCESS) {
-        PJ_PERROR(2, (THIS_FILE, status, "check-sync from %s: 200 OK not sent",
+        PJ_PERROR(2, (THIS_FILE, status, "check-sync/resync from %s: 200 OK not sent",
                       source));
     }
 
